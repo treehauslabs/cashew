@@ -15,7 +15,7 @@ public extension RadixNode {
             }
         }
 
-        let pathValuesAndTries = encryption.getValuesAlongPath(prefix)
+        let pathValuesAndTries = encryption.valuesAlongPath(prefix)
         if let (_, lastStrategy) = pathValuesAndTries.last {
             let remaining = encryption.traverse(path: prefix)
             switch lastStrategy {
@@ -42,7 +42,7 @@ public extension RadixNode {
         var newChildren = [Character: ChildType]()
         for (char, child) in children {
             let childOverrides = overrides?.traverseChild(char)
-            if let childOverrides = childOverrides, !childOverrides.getAllValues().isEmpty {
+            if let childOverrides = childOverrides, !childOverrides.allValues().isEmpty {
                 newChildren[char] = try child.encryptRecursiveWithOverrides(key: key, overrides: childOverrides)
             } else {
                 newChildren[char] = try child.encryptRecursive(key: key, overrides: nil)
@@ -51,7 +51,7 @@ public extension RadixNode {
 
         if let value = value as? Address {
             let valueOverrides = overrides?.traverse([""])
-            if let valueOverrides = valueOverrides, !valueOverrides.isEmpty() {
+            if let valueOverrides = valueOverrides, !valueOverrides.isEmpty {
                 guard let encrypted = try value.encrypt(encryption: valueOverrides).encryptSelf(key: key) as? ValueType else {
                     throw DataErrors.encryptionFailed
                 }
@@ -79,7 +79,7 @@ public extension RadixNode {
         var newChildren = [Character: ChildType]()
         for (char, child) in children {
             let childOverrides = overrides?.traverseChild(char)
-            if let childOverrides = childOverrides, !childOverrides.getAllValues().isEmpty {
+            if let childOverrides = childOverrides, !childOverrides.allValues().isEmpty {
                 newChildren[char] = try child.encryptRecursiveWithOverrides(key: key, overrides: childOverrides)
             } else {
                 newChildren[char] = try child.encryptTargeted(key: key, overrides: nil)
@@ -117,7 +117,7 @@ extension RadixHeader {
             }
         }
 
-        let pathValues = overrides.getValuesAlongPath(node.prefix)
+        let pathValues = overrides.valuesAlongPath(node.prefix)
         if let (_, override) = pathValues.last {
             let remaining = overrides.traverse(path: node.prefix)
             switch override {
@@ -135,7 +135,7 @@ extension RadixHeader {
 
         let encryptedNode: NodeType
         if let traversed = overrides.traverse(path: node.prefix) {
-            let childPathValues = traversed.getAllValues()
+            let childPathValues = traversed.allValues()
             if !childPathValues.isEmpty {
                 encryptedNode = try node.encryptRecursive(key: key, overrides: traversed)
             } else {

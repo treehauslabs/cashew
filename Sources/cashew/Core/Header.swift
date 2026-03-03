@@ -135,7 +135,7 @@ public extension Header {
     }
 
     func transform(transforms: ArrayTrie<Transform>, keyProvider: KeyProvider?) throws -> Self? {
-        if transforms.isEmpty() { return self }
+        if transforms.isEmpty { return self }
         guard let node = node else { throw DataErrors.nodeNotAvailable }
         guard let result = try node.transform(transforms: transforms, keyProvider: keyProvider) else { return nil }
         return try reEncryptIfNeeded(node: result, keyProvider: keyProvider)

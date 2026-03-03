@@ -26,7 +26,7 @@ public extension MerkleDictionary {
         var newChildren = [Character: ChildType]()
         for (char, child) in children {
             let childOverrides = overrides.traverseChild(char)
-            if let childOverrides = childOverrides, !childOverrides.getAllValues().isEmpty {
+            if let childOverrides = childOverrides, !childOverrides.allValues().isEmpty {
                 newChildren[char] = try child.encryptRecursiveWithOverrides(key: key, overrides: childOverrides)
             } else {
                 newChildren[char] = try child.encryptRecursive(key: key, overrides: childOverrides)

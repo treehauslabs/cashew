@@ -2,13 +2,13 @@ import ArrayTrie
 
 public extension RadixNode {
     static func insertAll(childChar: Character, transforms: ArrayTrie<Transform>) throws -> Self {
-        guard let childPrefix = transforms.getChildPrefix(char: childChar) else { throw TransformErrors.transformFailed }
+        guard let childPrefix = transforms.childPrefix(for: childChar) else { throw TransformErrors.transformFailed }
         guard let traversedTransforms = transforms.traverse(path: childPrefix) else { throw TransformErrors.transformFailed }
-        let childChars = traversedTransforms.getAllChildCharacters()
+        let childChars = traversedTransforms.childCharacters()
         var newProperties = [Character: ChildType]()
         for childChar in childChars {
             guard let traversedChild = traversedTransforms.traverseChild(childChar) else { throw TransformErrors.transformFailed }
-            if traversedChild.isEmpty() { throw TransformErrors.transformFailed }
+            if traversedChild.isEmpty { throw TransformErrors.transformFailed }
             let newChildAfterInsertion = try insertAll(childChar: childChar, transforms: traversedChild)
             let newChild = ChildType(node: newChildAfterInsertion)
             newProperties[childChar] = newChild
@@ -27,7 +27,7 @@ public extension RadixNode {
     }
     
     func transform(transforms: ArrayTrie<Transform>) throws -> Self? {
-        guard let childPrefix = transforms.getChildPrefix(char: prefix.first!) else { throw TransformErrors.transformFailed }
+        guard let childPrefix = transforms.childPrefix(for: prefix.first!) else { throw TransformErrors.transformFailed }
         let childPrefixSlice = ArraySlice(childPrefix)
         let prefixSlice = ArraySlice(prefix)
         let comparison = compareSlices(childPrefixSlice, prefixSlice)
@@ -56,10 +56,10 @@ public extension RadixNode {
                     return Self(prefix: prefix, value: newValue, children: children)
                 }
             }
-            let newChildren = traversedChild.isEmpty() ? children : try transformChildren(transforms: traversedChild)
+            let newChildren = traversedChild.isEmpty ? children : try transformChildren(transforms: traversedChild)
             if value != nil {
                 if let traversedNext = transforms.traverse([childPrefix]) {
-                    if !traversedNext.isEmpty() {
+                    if !traversedNext.isEmpty {
                         if let value = value as? Address {
                             if let newValue = try value.transform(transforms: traversedNext) {
                                 if let newValue = newValue as? ValueType {
@@ -132,7 +132,7 @@ public extension RadixNode {
             guard let traversedChild = transforms.traverse(path: childPrefix) else { throw TransformErrors.transformFailed }
             var newChildren = [Character: ChildType]()
             var existingNodeHandled = false
-            for childChar in traversedChild.getAllChildCharacters() {
+            for childChar in traversedChild.childCharacters() {
                 if childChar == existingNodeChar {
                     existingNodeHandled = true
                     guard let childTransform = traversedChild.traverseChild(childChar) else { throw TransformErrors.transformFailed }
@@ -179,7 +179,7 @@ public extension RadixNode {
     
     func transformChildren(transforms: ArrayTrie<Transform>) throws -> [Character: ChildType] {
         var newChildren = [Character: ChildType]()
-        let allChildChars = Set().union(transforms.getAllChildCharacters()).union(children.keys)
+        let allChildChars = Set().union(transforms.childCharacters()).union(children.keys)
         for childChar in allChildChars {
             if let transformChild = transforms.traverseChild(childChar) {
                 if let currentChild = children[childChar] {
@@ -208,7 +208,7 @@ public extension RadixNode {
     }
     
     func transform(transforms: ArrayTrie<Transform>, keyProvider: KeyProvider?) throws -> Self? {
-        guard let childPrefix = transforms.getChildPrefix(char: prefix.first!) else { throw TransformErrors.transformFailed }
+        guard let childPrefix = transforms.childPrefix(for: prefix.first!) else { throw TransformErrors.transformFailed }
         let childPrefixSlice = ArraySlice(childPrefix)
         let prefixSlice = ArraySlice(prefix)
         let comparison = compareSlices(childPrefixSlice, prefixSlice)
@@ -237,10 +237,10 @@ public extension RadixNode {
                     return Self(prefix: prefix, value: newValue, children: children)
                 }
             }
-            let newChildren = traversedChild.isEmpty() ? children : try transformChildren(transforms: traversedChild, keyProvider: keyProvider)
+            let newChildren = traversedChild.isEmpty ? children : try transformChildren(transforms: traversedChild, keyProvider: keyProvider)
             if value != nil {
                 if let traversedNext = transforms.traverse([childPrefix]) {
-                    if !traversedNext.isEmpty() {
+                    if !traversedNext.isEmpty {
                         if let value = value as? Address {
                             if let newValue = try value.transform(transforms: traversedNext, keyProvider: keyProvider) {
                                 if let newValue = newValue as? ValueType {
@@ -313,7 +313,7 @@ public extension RadixNode {
             guard let traversedChild = transforms.traverse(path: childPrefix) else { throw TransformErrors.transformFailed }
             var newChildren = [Character: ChildType]()
             var existingNodeHandled = false
-            for childChar in traversedChild.getAllChildCharacters() {
+            for childChar in traversedChild.childCharacters() {
                 if childChar == existingNodeChar {
                     existingNodeHandled = true
                     guard let childTransform = traversedChild.traverseChild(childChar) else { throw TransformErrors.transformFailed }
@@ -360,7 +360,7 @@ public extension RadixNode {
 
     func transformChildren(transforms: ArrayTrie<Transform>, keyProvider: KeyProvider?) throws -> [Character: ChildType] {
         var newChildren = [Character: ChildType]()
-        let allChildChars = Set().union(transforms.getAllChildCharacters()).union(children.keys)
+        let allChildChars = Set().union(transforms.childCharacters()).union(children.keys)
         for childChar in allChildChars {
             if let transformChild = transforms.traverseChild(childChar) {
                 if let currentChild = children[childChar] {
@@ -510,7 +510,7 @@ public extension RadixNode {
 
 extension RadixNode where ValueType: Header, ValueType.NodeType: MerkleDictionary {
     func transform(transforms: ArrayTrie<Transform>) throws -> Self? {
-        guard let childPrefix = transforms.getChildPrefix(char: prefix.first!) else { throw TransformErrors.transformFailed }
+        guard let childPrefix = transforms.childPrefix(for: prefix.first!) else { throw TransformErrors.transformFailed }
         let childPrefixSlice = ArraySlice(childPrefix)
         let prefixSlice = ArraySlice(prefix)
         let comparison = compareSlices(childPrefixSlice, prefixSlice)
@@ -540,9 +540,9 @@ extension RadixNode where ValueType: Header, ValueType.NodeType: MerkleDictionar
                     return Self(prefix: prefix, value: newValue, children: children)
                 }
             }
-            let newChildren = traversedChild == nil || traversedChild!.isEmpty() ? children : try transformChildren(transforms: traversedChild!)
+            let newChildren = traversedChild == nil || traversedChild!.isEmpty ? children : try transformChildren(transforms: traversedChild!)
             if let traversedNext = transforms.traverse([childPrefix]) {
-                if !traversedNext.isEmpty() {
+                if !traversedNext.isEmpty {
                     if let value = value {
                         if let newValue = try value.transform(transforms: traversedNext) {
                             return Self(prefix: prefix, value: newValue, children: newChildren)
@@ -613,7 +613,7 @@ extension RadixNode where ValueType: Header, ValueType.NodeType: MerkleDictionar
             guard let traversedChild = transforms.traverse(path: childPrefix) else { throw TransformErrors.transformFailed }
             var newChildren = [Character: ChildType]()
             var existingNodeHandled = false
-            for childChar in traversedChild.getAllChildCharacters() {
+            for childChar in traversedChild.childCharacters() {
                 if childChar == existingNodeChar {
                     existingNodeHandled = true
                     guard let childTransform = traversedChild.traverseChild(childChar) else { throw TransformErrors.transformFailed }
@@ -639,7 +639,7 @@ extension RadixNode where ValueType: Header, ValueType.NodeType: MerkleDictionar
                 }
             }
             if let traversedNext = transforms.traverse([childPrefix]) {
-                if !traversedNext.isEmpty() {
+                if !traversedNext.isEmpty {
                     let newDictionary = ValueType.NodeType()
                     let newHeader = ValueType(node: newDictionary)
                     let newHeaderValue = try newHeader.transform(transforms: traversedNext)
@@ -667,7 +667,7 @@ extension RadixNode where ValueType: Header, ValueType.NodeType: MerkleDictionar
     }
     
     func transform(transforms: ArrayTrie<Transform>, keyProvider: KeyProvider?) throws -> Self? {
-        guard let childPrefix = transforms.getChildPrefix(char: prefix.first!) else { throw TransformErrors.transformFailed }
+        guard let childPrefix = transforms.childPrefix(for: prefix.first!) else { throw TransformErrors.transformFailed }
         let childPrefixSlice = ArraySlice(childPrefix)
         let prefixSlice = ArraySlice(prefix)
         let comparison = compareSlices(childPrefixSlice, prefixSlice)
@@ -697,9 +697,9 @@ extension RadixNode where ValueType: Header, ValueType.NodeType: MerkleDictionar
                     return Self(prefix: prefix, value: newValue, children: children)
                 }
             }
-            let newChildren = traversedChild == nil || traversedChild!.isEmpty() ? children : try transformChildren(transforms: traversedChild!, keyProvider: keyProvider)
+            let newChildren = traversedChild == nil || traversedChild!.isEmpty ? children : try transformChildren(transforms: traversedChild!, keyProvider: keyProvider)
             if let traversedNext = transforms.traverse([childPrefix]) {
-                if !traversedNext.isEmpty() {
+                if !traversedNext.isEmpty {
                     if let value = value {
                         if let newValue = try value.transform(transforms: traversedNext, keyProvider: keyProvider) {
                             return Self(prefix: prefix, value: newValue, children: newChildren)
@@ -770,7 +770,7 @@ extension RadixNode where ValueType: Header, ValueType.NodeType: MerkleDictionar
             guard let traversedChild = transforms.traverse(path: childPrefix) else { throw TransformErrors.transformFailed }
             var newChildren = [Character: ChildType]()
             var existingNodeHandled = false
-            for childChar in traversedChild.getAllChildCharacters() {
+            for childChar in traversedChild.childCharacters() {
                 if childChar == existingNodeChar {
                     existingNodeHandled = true
                     guard let childTransform = traversedChild.traverseChild(childChar) else { throw TransformErrors.transformFailed }
@@ -796,7 +796,7 @@ extension RadixNode where ValueType: Header, ValueType.NodeType: MerkleDictionar
                 }
             }
             if let traversedNext = transforms.traverse([childPrefix]) {
-                if !traversedNext.isEmpty() {
+                if !traversedNext.isEmpty {
                     let newDictionary = ValueType.NodeType()
                     let newHeader = ValueType(node: newDictionary)
                     let newHeaderValue = try newHeader.transform(transforms: traversedNext, keyProvider: keyProvider)
@@ -824,13 +824,13 @@ extension RadixNode where ValueType: Header, ValueType.NodeType: MerkleDictionar
     }
 
     static func insertAll(childChar: Character, transforms: ArrayTrie<Transform>) throws -> Self {
-        guard let childPrefix = transforms.getChildPrefix(char: childChar) else { throw TransformErrors.transformFailed }
+        guard let childPrefix = transforms.childPrefix(for: childChar) else { throw TransformErrors.transformFailed }
         guard let traversedTransforms = transforms.traverse(path: childPrefix) else { throw TransformErrors.transformFailed }
-        let childChars = traversedTransforms.getAllChildCharacters()
+        let childChars = traversedTransforms.childCharacters()
         var newProperties = [Character: ChildType]()
         for childChar in childChars {
             guard let traversedChild = traversedTransforms.traverseChild(childChar) else { throw TransformErrors.transformFailed }
-            if traversedChild.isEmpty() { throw TransformErrors.transformFailed }
+            if traversedChild.isEmpty { throw TransformErrors.transformFailed }
             let newChildAfterInsertion = try insertAll(childChar: childChar, transforms: traversedChild)
             let newChild = ChildType(node: newChildAfterInsertion)
             newProperties[childChar] = newChild
@@ -845,7 +845,7 @@ extension RadixNode where ValueType: Header, ValueType.NodeType: MerkleDictionar
             }
         }
         if let traversedNext = transforms.traverse([childPrefix]) {
-            if !traversedNext.isEmpty() {
+            if !traversedNext.isEmpty {
                 let newDictionary = ValueType.NodeType()
                 let newHeader = ValueType(node: newDictionary)
                 let newHeaderValue = try newHeader.transform(transforms: traversedNext)

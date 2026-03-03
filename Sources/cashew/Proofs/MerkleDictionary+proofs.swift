@@ -7,11 +7,11 @@ public extension MerkleDictionary {
     
     func proofForChildren(paths: ArrayTrie<SparseMerkleProof>, fetcher: Fetcher) async throws -> Self {
         let newChildren = ThreadSafeDictionary<Character, ChildType>()
-        let allChildCharacters = Set().union(children.keys).union(paths.getAllChildCharacters())
+        let allChildCharacters = Set().union(children.keys).union(paths.childCharacters())
         try await allChildCharacters.concurrentForEach { childKey in
             guard let child = children[childKey] else {
                 guard let childPath = paths.traverseChild(childKey) else { return }
-                let allChildValues = Set(childPath.getAllValues())
+                let allChildValues = Set(childPath.allValues())
                 if allChildValues.contains(.deletion) || allChildValues.contains(.mutation) { throw ProofErrors.invalidProofType }
                 return
             }
@@ -19,7 +19,7 @@ public extension MerkleDictionary {
                 await newChildren.set(childKey, value: child)
                 return
             }
-            if childTraversal.isEmpty() {
+            if childTraversal.isEmpty {
                 await newChildren.set(childKey, value: child)
                 return
             }

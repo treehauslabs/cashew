@@ -2,7 +2,7 @@ import ArrayTrie
 
 public extension MerkleDictionary {
     func transform(transforms: ArrayTrie<Transform>) throws -> Self? {
-        let values = transforms.getValuesOneLevelDeep()
+        let values = transforms.childValues()
         var delta = 0
         for value in values {
             switch value {
@@ -12,7 +12,7 @@ public extension MerkleDictionary {
             }
         }
         var newChildren = [Character: ChildType]()
-        let allChildChars = Set().union(transforms.getAllChildCharacters()).union(properties().map { $0.first! })
+        let allChildChars = Set().union(transforms.childCharacters()).union(properties().map { $0.first! })
         for childChar in allChildChars {
             if let existingChild = children[childChar] {
                 if let traversal = transforms.traverseChild(childChar) {
@@ -29,7 +29,7 @@ public extension MerkleDictionary {
             }
             else {
                 guard let traversal = transforms.traverseChild(childChar) else { throw TransformErrors.transformFailed }
-                if !traversal.isEmpty() {
+                if !traversal.isEmpty {
                     let newChild = try ChildType.NodeType.insertAll(childChar: childChar, transforms: traversal)
                     newChildren[childChar] = ChildType(node: newChild)
                 }
@@ -39,7 +39,7 @@ public extension MerkleDictionary {
     }
     
     func transform(transforms: ArrayTrie<Transform>, keyProvider: KeyProvider?) throws -> Self? {
-        let values = transforms.getValuesOneLevelDeep()
+        let values = transforms.childValues()
         var delta = 0
         for value in values {
             switch value {
@@ -49,7 +49,7 @@ public extension MerkleDictionary {
             }
         }
         var newChildren = [Character: ChildType]()
-        let allChildChars = Set().union(transforms.getAllChildCharacters()).union(properties().map { $0.first! })
+        let allChildChars = Set().union(transforms.childCharacters()).union(properties().map { $0.first! })
         for childChar in allChildChars {
             if let existingChild = children[childChar] {
                 if let traversal = transforms.traverseChild(childChar) {
@@ -66,7 +66,7 @@ public extension MerkleDictionary {
             }
             else {
                 guard let traversal = transforms.traverseChild(childChar) else { throw TransformErrors.transformFailed }
-                if !traversal.isEmpty() {
+                if !traversal.isEmpty {
                     let newChild = try ChildType.NodeType.insertAll(childChar: childChar, transforms: traversal)
                     newChildren[childChar] = ChildType(node: newChild)
                 }

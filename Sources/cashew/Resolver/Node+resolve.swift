@@ -25,7 +25,7 @@ public extension Node {
                 await newProperties.set(property, value: resolvedAddress)
             }
             else if let nextPaths = paths.traverse([property]) {
-                if (!nextPaths.isEmpty()) {
+                if (!nextPaths.isEmpty) {
                     let resolvedAddress = try await address.resolve(paths: nextPaths, fetcher: fetcher)
                     await newProperties.set(property, value: resolvedAddress)
                 }

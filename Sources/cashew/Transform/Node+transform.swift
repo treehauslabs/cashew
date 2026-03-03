@@ -3,7 +3,7 @@ import CollectionConcurrencyKit
 
 public extension Node {    
     func transform(transforms: ArrayTrie<Transform>) throws -> Self? {
-        if transforms.isEmpty() { return self }
+        if transforms.isEmpty { return self }
         switch transforms.get([]) {
             case .update(let newNodeString):
                 guard let updatedNode = Self(newNodeString) else { throw TransformErrors.transformFailed }
@@ -15,7 +15,7 @@ public extension Node {
     func transformAfterUpdate(transforms: ArrayTrie<Transform>) throws -> Self? {
         var newProperties: [PathSegment: Address] = [:]
 
-        let allChildKeys = Set<String>().union(transforms.getAllChildKeys()).union(properties())
+        let allChildKeys = Set<String>().union(transforms.childKeys()).union(properties())
 
         for childKey in allChildKeys {
             guard let address = get(property: childKey) else { throw TransformErrors.transformFailed }
@@ -32,7 +32,7 @@ public extension Node {
     }
 
     func transform(transforms: ArrayTrie<Transform>, keyProvider: KeyProvider?) throws -> Self? {
-        if transforms.isEmpty() { return self }
+        if transforms.isEmpty { return self }
         switch transforms.get([]) {
             case .update(let newNodeString):
                 guard let updatedNode = Self(newNodeString) else { throw TransformErrors.transformFailed }
@@ -44,7 +44,7 @@ public extension Node {
     func transformAfterUpdate(transforms: ArrayTrie<Transform>, keyProvider: KeyProvider?) throws -> Self? {
         var newProperties: [PathSegment: Address] = [:]
 
-        let allChildKeys = Set<String>().union(transforms.getAllChildKeys()).union(properties())
+        let allChildKeys = Set<String>().union(transforms.childKeys()).union(properties())
 
         for childKey in allChildKeys {
             guard let address = get(property: childKey) else { throw TransformErrors.transformFailed }

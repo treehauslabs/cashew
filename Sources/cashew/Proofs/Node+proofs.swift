@@ -6,10 +6,10 @@ public extension Node {
         
         let rootValue = paths.get([])
         if rootValue != nil && rootValue != .mutation && rootValue != .existence { throw ProofErrors.invalidProofType }
-        if paths.getAllChildCharacters().count == 0 { return self }
-        
-        let allProperties = Set().union(paths.getAllChildKeys()).union(properties())
-        let childKeys = paths.getAllChildKeys()
+        if paths.childCharacters().count == 0 { return self }
+
+        let allProperties = Set().union(paths.childKeys()).union(properties())
+        let childKeys = paths.childKeys()
         
         try await allProperties.concurrentForEach { property in
             guard let address = get(property: property) else {
@@ -22,7 +22,7 @@ public extension Node {
                 await newProperties.set(property, value: address)
                 return
             }
-            if nextPaths.isEmpty() {
+            if nextPaths.isEmpty {
                 await newProperties.set(property, value: address)
                 return
             }

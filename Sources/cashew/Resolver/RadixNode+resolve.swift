@@ -2,7 +2,7 @@ import ArrayTrie
 
 public extension RadixNode {
     func resolve(paths: ArrayTrie<ResolutionStrategy>, fetcher: Fetcher) async throws -> Self {
-        let pathValuesAndTries = paths.getValuesAlongPath(prefix)
+        let pathValuesAndTries = paths.valuesAlongPath(prefix)
         if pathValuesAndTries.map({ $0.1 }).contains(.recursive) {
             return try await resolveRecursive(fetcher: fetcher)
         }
@@ -93,7 +93,7 @@ public extension RadixNode {
         var finalNextPaths = nextPaths
         
         if let paths = paths {
-            let pathValuesAndTries = paths.getValuesAlongPath(prefix)
+            let pathValuesAndTries = paths.valuesAlongPath(prefix)
             if pathValuesAndTries.map({ $0.1 }).contains(.recursive) {
                 return try await resolveRecursive(fetcher: fetcher)
             }

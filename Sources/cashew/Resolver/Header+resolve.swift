@@ -10,7 +10,7 @@ public extension Header {
     }
 
     func resolve(paths: ArrayTrie<ResolutionStrategy>, fetcher: Fetcher) async throws -> Self {
-        if paths.isEmpty() && paths.get([]) == nil { return self }
+        if paths.isEmpty && paths.get([]) == nil { return self }
         if let node = node {
             let resolvedNode = try await node.resolve(paths: paths, fetcher: fetcher)
             return Self(rawCID: rawCID, node: resolvedNode, encryptionInfo: encryptionInfo)
