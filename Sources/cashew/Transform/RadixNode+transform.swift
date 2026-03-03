@@ -1,6 +1,15 @@
 import ArrayTrie
 
 public extension RadixNode {
+    func collapsed(prefix pfx: String, children: [Character: ChildType]) throws -> Self? {
+        if children.isEmpty { return nil }
+        if children.count == 1 {
+            guard let child = children.first?.value.node else { throw TransformErrors.transformFailed }
+            return Self(prefix: pfx + child.prefix, value: child.value, children: child.children)
+        }
+        return Self(prefix: pfx, value: nil, children: children)
+    }
+
     static func insertAll(childChar: Character, transforms: ArrayTrie<Transform>) throws -> Self {
         guard let childPrefix = transforms.childPrefix(for: childChar) else { throw TransformErrors.transformFailed }
         guard let traversedTransforms = transforms.traverse(path: childPrefix) else { throw TransformErrors.transformFailed }
@@ -26,187 +35,6 @@ public extension RadixNode {
         return Self(prefix: childPrefix, value: nil, children: newProperties)
     }
     
-    func transform(transforms: ArrayTrie<Transform>) throws -> Self? {
-        guard let childPrefix = transforms.childPrefix(for: prefix.first!) else { throw TransformErrors.transformFailed }
-        let childPrefixSlice = ArraySlice(childPrefix)
-        let prefixSlice = ArraySlice(prefix)
-        let comparison = compareSlices(childPrefixSlice, prefixSlice)
-        if comparison == 0 {
-            guard let traversedChild = transforms.traverse(path: childPrefix) else { throw TransformErrors.transformFailed }
-            if let transform = traversedChild.get([""]) {
-                switch transform {
-                case .update(let newValue):
-                    let newChildren = try transformChildren(transforms: traversedChild)
-                    guard let newValue = ValueType(newValue) else { throw TransformErrors.transformFailed }
-                    return Self(prefix: prefix, value: newValue, children: newChildren)
-                case .delete:
-                    if value == nil { throw TransformErrors.transformFailed }
-                    let newChildren = try transformChildren(transforms: traversedChild)
-                    if newChildren.count == 0 {
-                        return nil
-                    }
-                    if newChildren.count == 1 {
-                        guard let childValue = newChildren.first?.value.node else { throw TransformErrors.transformFailed }
-                        return Self(prefix: prefix + childValue.prefix, value: childValue.value, children: childValue.children)
-                    }
-                    return Self(prefix: prefix, value: nil, children: newChildren)
-                case .insert(let newValue):
-                    if value != nil { throw TransformErrors.transformFailed }
-                    guard let newValue = ValueType(newValue) else { throw TransformErrors.transformFailed }
-                    return Self(prefix: prefix, value: newValue, children: children)
-                }
-            }
-            let newChildren = traversedChild.isEmpty ? children : try transformChildren(transforms: traversedChild)
-            if value != nil {
-                if let traversedNext = transforms.traverse([childPrefix]) {
-                    if !traversedNext.isEmpty {
-                        if let value = value as? Address {
-                            if let newValue = try value.transform(transforms: traversedNext) {
-                                if let newValue = newValue as? ValueType {
-                                    return Self(prefix: prefix, value: newValue, children: newChildren)
-                                }
-                                else {
-                                    throw TransformErrors.transformFailed
-                                }
-                            }
-                            if newChildren.count == 0 {
-                                return nil
-                            }
-                            if newChildren.count == 1 {
-                                guard let childValue = newChildren.first?.value.node else { throw TransformErrors.transformFailed }
-                                return Self(prefix: prefix + childValue.prefix, value: childValue.value, children: childValue.children)
-                            }
-                            return Self(prefix: prefix, value: nil, children: newChildren)
-                        }
-                        else { throw TransformErrors.invalidKey }
-                    }
-                }
-                return Self(prefix: prefix, value: value, children: newChildren)
-            }
-            if newChildren.count == 0 {
-                return nil
-            }
-            if newChildren.count == 1 {
-                guard let childValue = newChildren.first?.value.node else { throw TransformErrors.transformFailed }
-                return Self(prefix: prefix + childValue.prefix, value: childValue.value, children: childValue.children)
-            }
-            return Self(prefix: prefix, value: nil, children: newChildren)
-        }
-        if comparison == 1 {
-            let remainingChildPrefix = childPrefixSlice.dropFirst(prefix.count)
-            guard let traversedChild = transforms.traverse(path: prefix) else { throw TransformErrors.transformFailed }
-            let childChar = remainingChildPrefix.first!
-            if let child = children[childChar] {
-                guard let childNode = child.node else { throw TransformErrors.missingData }
-                if let newChild = try childNode.transform(transforms: traversedChild) {
-                    var newChildren = children
-                    newChildren[childChar] = ChildType(node: newChild)
-                    return Self(prefix: prefix, value: value, children: newChildren)
-                }
-                else {
-                    var newChildren = children
-                    newChildren.removeValue(forKey: childChar)
-                    if value != nil {
-                        return Self(prefix: prefix, value: value, children: newChildren)
-                    }
-                    if newChildren.count == 0 {
-                        return nil
-                    }
-                    if newChildren.count == 1 {
-                        guard let childValue = newChildren.first?.value.node else { throw TransformErrors.transformFailed }
-                        return Self(prefix: prefix + childValue.prefix, value: childValue.value, children: childValue.children)
-                    }
-                    return Self(prefix: prefix, value: nil, children: newChildren)
-                }
-            }
-            else {
-                let newChild = try Self.insertAll(childChar: childChar, transforms: traversedChild)
-                var newChildren = children
-                newChildren[childChar] = ChildType(node: newChild)
-                return Self(prefix: prefix, value: value, children: newChildren)
-            }
-        }
-        if comparison == 2 {
-            let remainingPrefix = prefixSlice.dropFirst(childPrefix.count)
-            guard let existingNodeChar = remainingPrefix.first else { throw TransformErrors.transformFailed }
-            guard let traversedChild = transforms.traverse(path: childPrefix) else { throw TransformErrors.transformFailed }
-            var newChildren = [Character: ChildType]()
-            var existingNodeHandled = false
-            for childChar in traversedChild.childCharacters() {
-                if childChar == existingNodeChar {
-                    existingNodeHandled = true
-                    guard let childTransform = traversedChild.traverseChild(childChar) else { throw TransformErrors.transformFailed }
-                    if let newChild = try Self(prefix: String(remainingPrefix), value: value, children: children).transform(transforms: childTransform) {
-                        newChildren[childChar] = ChildType(node: newChild)
-                    }
-                }
-                else {
-                    guard let childTransform = traversedChild.traverseChild(childChar) else { throw TransformErrors.transformFailed }
-                    let newChild = try Self.insertAll(childChar: childChar, transforms: childTransform)
-                    newChildren[childChar] = ChildType(node: newChild)
-                }
-            }
-            if !existingNodeHandled {
-                newChildren[existingNodeChar] = ChildType(node: Self(prefix: String(remainingPrefix), value: value, children: children))
-            }
-            if let newValue = traversedChild.get([""]) {
-                switch newValue {
-                case .insert(let newValue):
-                    guard let newValue = ValueType(newValue) else { throw TransformErrors.transformFailed }
-                    return Self(prefix: childPrefix, value: newValue, children: newChildren)
-                default: throw TransformErrors.transformFailed
-                }
-            }
-            if newChildren.count == 0 {
-                return nil
-            }
-            if newChildren.count == 1 {
-                guard let childValue = newChildren.first?.value.node else { throw TransformErrors.transformFailed }
-                return Self(prefix: childPrefix + childValue.prefix, value: childValue.value, children: childValue.children)
-            }
-            return Self(prefix: childPrefix, value: nil, children: newChildren)
-        }
-        let common = commonPrefixString(prefixSlice, childPrefixSlice)
-        let prefixSliceRemainder = String(prefixSlice.dropFirst(common.count))
-        let childPrefixSliceRemainder = String(childPrefixSlice.dropFirst(common.count))
-        guard let childTransforms = transforms.traverse(path: common)?.traverseChild(childPrefixSliceRemainder.first!) else { throw TransformErrors.transformFailed }
-        let newChild = try Self.insertAll(childChar: childPrefixSliceRemainder.first!, transforms: childTransforms)
-        var newChildren = [Character: ChildType]()
-        newChildren[childPrefixSliceRemainder.first!] = ChildType(node: newChild)
-        newChildren[prefixSliceRemainder.first!] = ChildType(node: Self(prefix: String(prefixSliceRemainder), value: value, children: children))
-        return Self(prefix: common, value: nil, children: newChildren)
-    }
-    
-    func transformChildren(transforms: ArrayTrie<Transform>) throws -> [Character: ChildType] {
-        var newChildren = [Character: ChildType]()
-        let allChildChars = Set().union(transforms.childCharacters()).union(children.keys)
-        for childChar in allChildChars {
-            if let transformChild = transforms.traverseChild(childChar) {
-                if let currentChild = children[childChar] {
-                    if let transformedChild = try currentChild.transform(transforms: transformChild) {
-                        newChildren[childChar] = transformedChild
-                    }
-                    else {
-                        newChildren.removeValue(forKey: childChar)
-                    }
-                }
-                else {
-                    let newChild = try Self.insertAll(childChar: childChar, transforms: transformChild)
-                    newChildren[childChar] = ChildType(node: newChild)
-                }
-            }
-            else {
-                if let currentChild = children[childChar] {
-                    newChildren[childChar] = currentChild
-                }
-                else {
-                    throw TransformErrors.transformFailed
-                }
-            }
-        }
-        return newChildren
-    }
-    
     func transform(transforms: ArrayTrie<Transform>, keyProvider: KeyProvider?) throws -> Self? {
         guard let childPrefix = transforms.childPrefix(for: prefix.first!) else { throw TransformErrors.transformFailed }
         let childPrefixSlice = ArraySlice(childPrefix)
@@ -223,14 +51,7 @@ public extension RadixNode {
                 case .delete:
                     if value == nil { throw TransformErrors.transformFailed }
                     let newChildren = try transformChildren(transforms: traversedChild, keyProvider: keyProvider)
-                    if newChildren.count == 0 {
-                        return nil
-                    }
-                    if newChildren.count == 1 {
-                        guard let childValue = newChildren.first?.value.node else { throw TransformErrors.transformFailed }
-                        return Self(prefix: prefix + childValue.prefix, value: childValue.value, children: childValue.children)
-                    }
-                    return Self(prefix: prefix, value: nil, children: newChildren)
+                    return try collapsed(prefix: prefix, children: newChildren)
                 case .insert(let newValue):
                     if value != nil { throw TransformErrors.transformFailed }
                     guard let newValue = ValueType(newValue) else { throw TransformErrors.transformFailed }
@@ -250,28 +71,14 @@ public extension RadixNode {
                                     throw TransformErrors.transformFailed
                                 }
                             }
-                            if newChildren.count == 0 {
-                                return nil
-                            }
-                            if newChildren.count == 1 {
-                                guard let childValue = newChildren.first?.value.node else { throw TransformErrors.transformFailed }
-                                return Self(prefix: prefix + childValue.prefix, value: childValue.value, children: childValue.children)
-                            }
-                            return Self(prefix: prefix, value: nil, children: newChildren)
+                            return try collapsed(prefix: prefix, children: newChildren)
                         }
                         else { throw TransformErrors.invalidKey }
                     }
                 }
                 return Self(prefix: prefix, value: value, children: newChildren)
             }
-            if newChildren.count == 0 {
-                return nil
-            }
-            if newChildren.count == 1 {
-                guard let childValue = newChildren.first?.value.node else { throw TransformErrors.transformFailed }
-                return Self(prefix: prefix + childValue.prefix, value: childValue.value, children: childValue.children)
-            }
-            return Self(prefix: prefix, value: nil, children: newChildren)
+            return try collapsed(prefix: prefix, children: newChildren)
         }
         if comparison == 1 {
             let remainingChildPrefix = childPrefixSlice.dropFirst(prefix.count)
@@ -290,14 +97,7 @@ public extension RadixNode {
                     if value != nil {
                         return Self(prefix: prefix, value: value, children: newChildren)
                     }
-                    if newChildren.count == 0 {
-                        return nil
-                    }
-                    if newChildren.count == 1 {
-                        guard let childValue = newChildren.first?.value.node else { throw TransformErrors.transformFailed }
-                        return Self(prefix: prefix + childValue.prefix, value: childValue.value, children: childValue.children)
-                    }
-                    return Self(prefix: prefix, value: nil, children: newChildren)
+                    return try collapsed(prefix: prefix, children: newChildren)
                 }
             }
             else {
@@ -338,14 +138,7 @@ public extension RadixNode {
                 default: throw TransformErrors.transformFailed
                 }
             }
-            if newChildren.count == 0 {
-                return nil
-            }
-            if newChildren.count == 1 {
-                guard let childValue = newChildren.first?.value.node else { throw TransformErrors.transformFailed }
-                return Self(prefix: childPrefix + childValue.prefix, value: childValue.value, children: childValue.children)
-            }
-            return Self(prefix: childPrefix, value: nil, children: newChildren)
+            return try collapsed(prefix: childPrefix, children: newChildren)
         }
         let common = commonPrefixString(prefixSlice, childPrefixSlice)
         let prefixSliceRemainder = String(prefixSlice.dropFirst(common.count))
@@ -360,7 +153,7 @@ public extension RadixNode {
 
     func transformChildren(transforms: ArrayTrie<Transform>, keyProvider: KeyProvider?) throws -> [Character: ChildType] {
         var newChildren = [Character: ChildType]()
-        let allChildChars = Set().union(transforms.childCharacters()).union(children.keys)
+        let allChildChars = Set(transforms.childCharacters()).union(children.keys)
         for childChar in allChildChars {
             if let transformChild = transforms.traverseChild(childChar) {
                 if let currentChild = children[childChar] {
@@ -411,17 +204,10 @@ public extension RadixNode {
     func deleting(key: ArraySlice<Character>) throws -> Self? {
         let prefixSlice = ArraySlice(prefix)
         let comparison = compareSlices(key, prefixSlice)
-        if comparison == 0 {
-            if children.count == 0 {
-                return nil
-            }
-            if children.count == 1 {
-                guard let childNode = children.first?.value.node else { throw TransformErrors.missingData }
-                return Self(prefix: prefix + childNode.prefix, value: childNode.value, children: childNode.children)
-            }
-            return Self(prefix: prefix, value: nil, children: children)
-        }
-        if comparison == 1 {
+        switch comparison {
+        case 0:
+            return try collapsed(prefix: prefix, children: children)
+        case 1:
             let newKey = key.dropFirst(prefixSlice.count)
             let childChar = newKey.first!
             guard let child = children[childChar] else { throw TransformErrors.invalidKey }
@@ -439,18 +225,19 @@ public extension RadixNode {
                 return Self(prefix: prefix + childNode.prefix, value: childNode.value, children: childNode.children)
             }
             return Self(prefix: prefix, value: value, children: newChildren)
+        default:
+            throw TransformErrors.invalidKey
         }
-        throw TransformErrors.invalidKey
     }
     
     func mutating(key: ArraySlice<Character>, value: ValueType) throws -> Self {
         let selfPathSlice = ArraySlice(prefix)
         let comparison = compareSlices(key, selfPathSlice)
-        if comparison == 0 {
+        switch comparison {
+        case 0:
             if self.value == nil { throw TransformErrors.invalidKey }
             return Self(prefix: prefix, value: value, children: children)
-        }
-        if comparison == 1 {
+        case 1:
             let keyRemainder = key.dropFirst(selfPathSlice.count)
             let keyChar = keyRemainder.first!
             if let child = children[keyChar] {
@@ -461,19 +248,20 @@ public extension RadixNode {
             } else {
                 throw TransformErrors.invalidKey
             }
+        default:
+            throw TransformErrors.invalidKey
         }
-        throw TransformErrors.invalidKey
     }
 
     
     func inserting(key: ArraySlice<Character>, value: ValueType) throws -> Self {
         let selfPathSlice = ArraySlice(prefix)
         let comparison = compareSlices(key, selfPathSlice)
-        if comparison == 0 {
+        switch comparison {
+        case 0:
             if self.value != nil { throw TransformErrors.invalidKey }
             return Self(prefix: prefix, value: value, children: children)
-        }
-        if comparison == 1 {
+        case 1:
             let keyRemainder = key.dropFirst(selfPathSlice.count)
             let keyChar = keyRemainder.first!
             if let child = children[keyChar] {
@@ -487,185 +275,24 @@ public extension RadixNode {
                 newChildren[keyChar] = newChild
                 return Self(prefix: prefix, value: self.value, children: newChildren)
             }
-        }
-        if comparison == 2 {
+        case 2:
             let remainingPath = String(selfPathSlice.dropFirst(key.count))
             let existingChild = ChildType(node: Self(prefix: remainingPath, value: self.value, children: children))
             let newChildren = [remainingPath.first!:existingChild]
             return Self(prefix: String(key), value: value, children: newChildren)
+        default:
+            let common = commonPrefixString(key, selfPathSlice)
+            let keyRemainder = String(key.dropFirst(common.count))
+            let pathRemainder = String(selfPathSlice.dropFirst(common.count))
+            let existingChild = ChildType(node: Self(prefix: pathRemainder, value: self.value, children: children))
+            let newChild = ChildType(node: Self(prefix: keyRemainder, value: value, children: [:]))
+            let newChildren = [pathRemainder.first!: existingChild, keyRemainder.first!: newChild]
+            return Self(prefix: common, value: nil, children: newChildren)
         }
-        // Paths diverge, need to split at common prefix
-        let common = commonPrefixString(key, selfPathSlice)
-        let keyRemainder = String(key.dropFirst(common.count))
-        let pathRemainder = String(selfPathSlice.dropFirst(common.count))
-        
-        // Create child for existing path
-        let existingChild = ChildType(node: Self(prefix: pathRemainder, value: self.value, children: children))
-        let newChild = ChildType(node: Self(prefix: keyRemainder, value: value, children: [:]))
-        let newChildren = [pathRemainder.first!: existingChild, keyRemainder.first!: newChild]
-        
-        return Self(prefix: common, value: nil, children: newChildren)
     }
 }
 
 extension RadixNode where ValueType: Header, ValueType.NodeType: MerkleDictionary {
-    func transform(transforms: ArrayTrie<Transform>) throws -> Self? {
-        guard let childPrefix = transforms.childPrefix(for: prefix.first!) else { throw TransformErrors.transformFailed }
-        let childPrefixSlice = ArraySlice(childPrefix)
-        let prefixSlice = ArraySlice(prefix)
-        let comparison = compareSlices(childPrefixSlice, prefixSlice)
-        if comparison == 0 {
-            let traversedChild = transforms.traverse(path: childPrefix)
-            if let traversedChild = traversedChild, let transform = traversedChild.get([""]) {
-                if transforms.traverse([prefix]) != nil { throw TransformErrors.transformFailed }
-                switch transform {
-                case .update(let newValue):
-                    let newChildren = try transformChildren(transforms: traversedChild)
-                    guard let newValue = ValueType(newValue) else { throw TransformErrors.transformFailed }
-                    return Self(prefix: prefix, value: newValue, children: newChildren)
-                case .delete:
-                    if value == nil { throw TransformErrors.transformFailed }
-                    let newChildren = try transformChildren(transforms: traversedChild)
-                    if newChildren.count == 0 {
-                        return nil
-                    }
-                    if newChildren.count == 1 {
-                        guard let childValue = newChildren.first?.value.node else { throw TransformErrors.transformFailed }
-                        return Self(prefix: prefix + childValue.prefix, value: childValue.value, children: childValue.children)
-                    }
-                    return Self(prefix: prefix, value: nil, children: newChildren)
-                case .insert(let newValue):
-                    if value != nil { throw TransformErrors.transformFailed }
-                    guard let newValue = ValueType(newValue) else { throw TransformErrors.transformFailed }
-                    return Self(prefix: prefix, value: newValue, children: children)
-                }
-            }
-            let newChildren = traversedChild == nil || traversedChild!.isEmpty ? children : try transformChildren(transforms: traversedChild!)
-            if let traversedNext = transforms.traverse([childPrefix]) {
-                if !traversedNext.isEmpty {
-                    if let value = value {
-                        if let newValue = try value.transform(transforms: traversedNext) {
-                            return Self(prefix: prefix, value: newValue, children: newChildren)
-                        }
-                        if newChildren.count == 0 {
-                            return nil
-                        }
-                        if newChildren.count == 1 {
-                            guard let childValue = newChildren.first?.value.node else { throw TransformErrors.transformFailed }
-                            return Self(prefix: prefix + childValue.prefix, value: childValue.value, children: childValue.children)
-                        }
-                        return Self(prefix: prefix, value: nil, children: newChildren)
-                    }
-                    else {
-                        let newDictionary = ValueType.NodeType()
-                        let newHeader = ValueType(node: newDictionary)
-                        let newHeaderValue = try newHeader.transform(transforms: traversedNext)
-                        return Self(prefix: prefix, value: newHeaderValue, children: children)
-                    }
-                }
-            }
-            if newChildren.count == 0 {
-                return nil
-            }
-            if newChildren.count == 1 {
-                guard let childValue = newChildren.first?.value.node else { throw TransformErrors.transformFailed }
-                return Self(prefix: prefix + childValue.prefix, value: childValue.value, children: childValue.children)
-            }
-            return Self(prefix: prefix, value: nil, children: newChildren)
-        }
-        if comparison == 1 {
-            let remainingChildPrefix = childPrefixSlice.dropFirst(prefix.count)
-            guard let traversedChild = transforms.traverse(path: prefix) else { throw TransformErrors.transformFailed }
-            let childChar = remainingChildPrefix.first!
-            if let child = children[childChar] {
-                guard let childNode = child.node else { throw TransformErrors.missingData }
-                if let newChild = try childNode.transform(transforms: traversedChild) {
-                    var newChildren = children
-                    newChildren[childChar] = ChildType(node: newChild)
-                    return Self(prefix: prefix, value: value, children: newChildren)
-                }
-                else {
-                    var newChildren = children
-                    newChildren.removeValue(forKey: childChar)
-                    if value != nil {
-                        return Self(prefix: prefix, value: value, children: newChildren)
-                    }
-                    if newChildren.count == 0 {
-                        return nil
-                    }
-                    if newChildren.count == 1 {
-                        guard let childValue = newChildren.first?.value.node else { throw TransformErrors.transformFailed }
-                        return Self(prefix: prefix + childValue.prefix, value: childValue.value, children: childValue.children)
-                    }
-                    return Self(prefix: prefix, value: nil, children: newChildren)
-                }
-            }
-            else {
-                let newChild = try Self.insertAll(childChar: childChar, transforms: traversedChild)
-                var newChildren = children
-                newChildren[childChar] = ChildType(node: newChild)
-                return Self(prefix: prefix, value: value, children: newChildren)
-            }
-        }
-        if comparison == 2 {
-            let remainingPrefix = prefixSlice.dropFirst(childPrefix.count)
-            guard let existingNodeChar = remainingPrefix.first else { throw TransformErrors.transformFailed }
-            guard let traversedChild = transforms.traverse(path: childPrefix) else { throw TransformErrors.transformFailed }
-            var newChildren = [Character: ChildType]()
-            var existingNodeHandled = false
-            for childChar in traversedChild.childCharacters() {
-                if childChar == existingNodeChar {
-                    existingNodeHandled = true
-                    guard let childTransform = traversedChild.traverseChild(childChar) else { throw TransformErrors.transformFailed }
-                    if let newChild = try Self(prefix: String(remainingPrefix), value: value, children: children).transform(transforms: childTransform) {
-                        newChildren[childChar] = ChildType(node: newChild)
-                    }
-                }
-                else {
-                    guard let childTransform = traversedChild.traverseChild(childChar) else { throw TransformErrors.transformFailed }
-                    let newChild = try Self.insertAll(childChar: childChar, transforms: childTransform)
-                    newChildren[childChar] = ChildType(node: newChild)
-                }
-            }
-            if !existingNodeHandled {
-                newChildren[existingNodeChar] = ChildType(node: Self(prefix: String(remainingPrefix), value: value, children: children))
-            }
-            if let newValue = traversedChild.get([""]) {
-                switch newValue {
-                case .insert(let newValue):
-                    guard let newValue = ValueType(newValue) else { throw TransformErrors.transformFailed }
-                    return Self(prefix: childPrefix, value: newValue, children: newChildren)
-                default: throw TransformErrors.transformFailed
-                }
-            }
-            if let traversedNext = transforms.traverse([childPrefix]) {
-                if !traversedNext.isEmpty {
-                    let newDictionary = ValueType.NodeType()
-                    let newHeader = ValueType(node: newDictionary)
-                    let newHeaderValue = try newHeader.transform(transforms: traversedNext)
-                    return Self(prefix: childPrefix, value: newHeaderValue, children: newChildren)
-                }
-            }
-            if newChildren.count == 0 {
-                return nil
-            }
-            if newChildren.count == 1 {
-                guard let childValue = newChildren.first?.value.node else { throw TransformErrors.transformFailed }
-                return Self(prefix: childPrefix + childValue.prefix, value: childValue.value, children: childValue.children)
-            }
-            return Self(prefix: childPrefix, value: nil, children: newChildren)
-        }
-        let common = commonPrefixString(prefixSlice, childPrefixSlice)
-        let prefixSliceRemainder = String(prefixSlice.dropFirst(common.count))
-        let childPrefixSliceRemainder = String(childPrefixSlice.dropFirst(common.count))
-        guard let childTransforms = transforms.traverse(path: common)?.traverseChild(childPrefixSliceRemainder.first!) else { throw TransformErrors.transformFailed }
-        let newChild = try Self.insertAll(childChar: childPrefixSliceRemainder.first!, transforms: childTransforms)
-        var newChildren = [Character: ChildType]()
-        newChildren[childPrefixSliceRemainder.first!] = ChildType(node: newChild)
-        newChildren[prefixSliceRemainder.first!] = ChildType(node: Self(prefix: String(prefixSliceRemainder), value: value, children: children))
-        return Self(prefix: common, value: nil, children: newChildren)
-    }
-    
     func transform(transforms: ArrayTrie<Transform>, keyProvider: KeyProvider?) throws -> Self? {
         guard let childPrefix = transforms.childPrefix(for: prefix.first!) else { throw TransformErrors.transformFailed }
         let childPrefixSlice = ArraySlice(childPrefix)
@@ -683,14 +310,7 @@ extension RadixNode where ValueType: Header, ValueType.NodeType: MerkleDictionar
                 case .delete:
                     if value == nil { throw TransformErrors.transformFailed }
                     let newChildren = try transformChildren(transforms: traversedChild, keyProvider: keyProvider)
-                    if newChildren.count == 0 {
-                        return nil
-                    }
-                    if newChildren.count == 1 {
-                        guard let childValue = newChildren.first?.value.node else { throw TransformErrors.transformFailed }
-                        return Self(prefix: prefix + childValue.prefix, value: childValue.value, children: childValue.children)
-                    }
-                    return Self(prefix: prefix, value: nil, children: newChildren)
+                    return try collapsed(prefix: prefix, children: newChildren)
                 case .insert(let newValue):
                     if value != nil { throw TransformErrors.transformFailed }
                     guard let newValue = ValueType(newValue) else { throw TransformErrors.transformFailed }
@@ -704,14 +324,7 @@ extension RadixNode where ValueType: Header, ValueType.NodeType: MerkleDictionar
                         if let newValue = try value.transform(transforms: traversedNext, keyProvider: keyProvider) {
                             return Self(prefix: prefix, value: newValue, children: newChildren)
                         }
-                        if newChildren.count == 0 {
-                            return nil
-                        }
-                        if newChildren.count == 1 {
-                            guard let childValue = newChildren.first?.value.node else { throw TransformErrors.transformFailed }
-                            return Self(prefix: prefix + childValue.prefix, value: childValue.value, children: childValue.children)
-                        }
-                        return Self(prefix: prefix, value: nil, children: newChildren)
+                        return try collapsed(prefix: prefix, children: newChildren)
                     }
                     else {
                         let newDictionary = ValueType.NodeType()
@@ -721,14 +334,7 @@ extension RadixNode where ValueType: Header, ValueType.NodeType: MerkleDictionar
                     }
                 }
             }
-            if newChildren.count == 0 {
-                return nil
-            }
-            if newChildren.count == 1 {
-                guard let childValue = newChildren.first?.value.node else { throw TransformErrors.transformFailed }
-                return Self(prefix: prefix + childValue.prefix, value: childValue.value, children: childValue.children)
-            }
-            return Self(prefix: prefix, value: nil, children: newChildren)
+            return try collapsed(prefix: prefix, children: newChildren)
         }
         if comparison == 1 {
             let remainingChildPrefix = childPrefixSlice.dropFirst(prefix.count)
@@ -747,14 +353,7 @@ extension RadixNode where ValueType: Header, ValueType.NodeType: MerkleDictionar
                     if value != nil {
                         return Self(prefix: prefix, value: value, children: newChildren)
                     }
-                    if newChildren.count == 0 {
-                        return nil
-                    }
-                    if newChildren.count == 1 {
-                        guard let childValue = newChildren.first?.value.node else { throw TransformErrors.transformFailed }
-                        return Self(prefix: prefix + childValue.prefix, value: childValue.value, children: childValue.children)
-                    }
-                    return Self(prefix: prefix, value: nil, children: newChildren)
+                    return try collapsed(prefix: prefix, children: newChildren)
                 }
             }
             else {
@@ -803,14 +402,7 @@ extension RadixNode where ValueType: Header, ValueType.NodeType: MerkleDictionar
                     return Self(prefix: childPrefix, value: newHeaderValue, children: newChildren)
                 }
             }
-            if newChildren.count == 0 {
-                return nil
-            }
-            if newChildren.count == 1 {
-                guard let childValue = newChildren.first?.value.node else { throw TransformErrors.transformFailed }
-                return Self(prefix: childPrefix + childValue.prefix, value: childValue.value, children: childValue.children)
-            }
-            return Self(prefix: childPrefix, value: nil, children: newChildren)
+            return try collapsed(prefix: childPrefix, children: newChildren)
         }
         let common = commonPrefixString(prefixSlice, childPrefixSlice)
         let prefixSliceRemainder = String(prefixSlice.dropFirst(common.count))

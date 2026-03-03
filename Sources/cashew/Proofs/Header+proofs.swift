@@ -16,9 +16,7 @@ public extension Header {
             return Self(rawCID: rawCID, node: resolvedNode, encryptionInfo: encryptionInfo)
         }
         else {
-            let fetchedData = try await fetcher.fetch(rawCid: rawCID)
-            let decrypted = try decryptIfNeeded(data: fetchedData, fetcher: fetcher)
-            guard let newNode = NodeType(data: decrypted) else { throw CashewDecodingError.decodeFromDataError }
+            let newNode = try await fetchAndDecodeNode(fetcher: fetcher)
             let resolvedNode = try await newNode.proof(paths: paths, fetcher: fetcher)
             return Self(rawCID: rawCID, node: resolvedNode, encryptionInfo: encryptionInfo)
         }

@@ -1,43 +1,6 @@
 import ArrayTrie
 
 public extension MerkleDictionary {
-    func transform(transforms: ArrayTrie<Transform>) throws -> Self? {
-        let values = transforms.childValues()
-        var delta = 0
-        for value in values {
-            switch value {
-                case .delete: delta -= 1
-                case .insert(_): delta += 1
-                default: continue
-            }
-        }
-        var newChildren = [Character: ChildType]()
-        let allChildChars = Set().union(transforms.childCharacters()).union(properties().map { $0.first! })
-        for childChar in allChildChars {
-            if let existingChild = children[childChar] {
-                if let traversal = transforms.traverseChild(childChar) {
-                    if let traversedChild = try existingChild.transform(transforms: traversal) {
-                        newChildren[childChar] = traversedChild
-                    }
-                    else {
-                        newChildren.removeValue(forKey: childChar)
-                    }
-                }
-                else {
-                    newChildren[childChar] = existingChild
-                }
-            }
-            else {
-                guard let traversal = transforms.traverseChild(childChar) else { throw TransformErrors.transformFailed }
-                if !traversal.isEmpty {
-                    let newChild = try ChildType.NodeType.insertAll(childChar: childChar, transforms: traversal)
-                    newChildren[childChar] = ChildType(node: newChild)
-                }
-            }
-        }
-        return Self(children: newChildren, count: count + delta)
-    }
-    
     func transform(transforms: ArrayTrie<Transform>, keyProvider: KeyProvider?) throws -> Self? {
         let values = transforms.childValues()
         var delta = 0
@@ -49,7 +12,7 @@ public extension MerkleDictionary {
             }
         }
         var newChildren = [Character: ChildType]()
-        let allChildChars = Set().union(transforms.childCharacters()).union(properties().map { $0.first! })
+        let allChildChars = Set(transforms.childCharacters()).union(properties().map { $0.first! })
         for childChar in allChildChars {
             if let existingChild = children[childChar] {
                 if let traversal = transforms.traverseChild(childChar) {

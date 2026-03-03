@@ -15,7 +15,7 @@ public protocol Address: Sendable {
 }
 
 public extension Address {
-    func transform(transforms: ArrayTrie<Transform>, keyProvider: KeyProvider?) throws -> Self? {
-        return try transform(transforms: transforms)
+    func transform(transforms: ArrayTrie<Transform>) throws -> Self? {
+        return try transform(transforms: transforms, keyProvider: nil)
     }
 }

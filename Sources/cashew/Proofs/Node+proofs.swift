@@ -8,7 +8,7 @@ public extension Node {
         if rootValue != nil && rootValue != .mutation && rootValue != .existence { throw ProofErrors.invalidProofType }
         if paths.childCharacters().count == 0 { return self }
 
-        let allProperties = Set().union(paths.childKeys()).union(properties())
+        let allProperties = Set(paths.childKeys()).union(properties())
         let childKeys = paths.childKeys()
         
         try await allProperties.concurrentForEach { property in

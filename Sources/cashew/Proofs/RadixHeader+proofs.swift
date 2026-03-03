@@ -5,9 +5,7 @@ public extension RadixHeader {
             return Self(rawCID: rawCID, node: newNode, encryptionInfo: encryptionInfo)
         }
         else {
-            let fetchedData = try await fetcher.fetch(rawCid: rawCID)
-            let decrypted = try decryptIfNeeded(data: fetchedData, fetcher: fetcher)
-            guard let node = NodeType(data: decrypted) else { throw CashewDecodingError.decodeFromDataError }
+            let node = try await fetchAndDecodeNode(fetcher: fetcher)
             let newNode = try await node.resolveChildren(fetcher: fetcher)
             return Self(rawCID: rawCID, node: newNode, encryptionInfo: encryptionInfo)
         }

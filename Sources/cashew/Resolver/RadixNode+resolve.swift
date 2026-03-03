@@ -22,11 +22,11 @@ public extension RadixNode {
             let resolved = await set(properties: newProperties.allKeyValuePairs())
             if let value = value as? Address {
                 if let downstreamPaths = paths.traverse([prefix]) {
-                    guard let resolvedValue = try await value.resolve(paths: downstreamPaths, fetcher: fetcher) as? ValueType else { throw ResolutionErrors.TypeError }
+                    guard let resolvedValue = try await value.resolve(paths: downstreamPaths, fetcher: fetcher) as? ValueType else { throw ResolutionErrors.typeError }
                     return Self(prefix: resolved.prefix, value: resolvedValue, children: resolved.children)
                 }
                 if paths.get([prefix]) == .targeted {
-                    guard let resolvedValue = try await value.resolve(fetcher: fetcher) as? ValueType else { throw ResolutionErrors.TypeError }
+                    guard let resolvedValue = try await value.resolve(fetcher: fetcher) as? ValueType else { throw ResolutionErrors.typeError }
                     return Self(prefix: resolved.prefix, value: resolvedValue, children: resolved.children)
                 }
             }
@@ -53,10 +53,10 @@ public extension RadixNode {
                     }
                     return .targeted
                 })
-                guard let newValue = try await value.resolve(paths: mergedDownstreamPaths, fetcher: fetcher) as? ValueType else { throw ResolutionErrors.TypeError }
+                guard let newValue = try await value.resolve(paths: mergedDownstreamPaths, fetcher: fetcher) as? ValueType else { throw ResolutionErrors.typeError }
                 return Self(prefix: resolved.prefix, value: newValue, children: resolved.children)
             }
-            guard let newValue = try await value.resolve(paths: traversalTrie, fetcher: fetcher) as? ValueType else { throw ResolutionErrors.TypeError }
+            guard let newValue = try await value.resolve(paths: traversalTrie, fetcher: fetcher) as? ValueType else { throw ResolutionErrors.typeError }
             return Self(prefix: resolved.prefix, value: newValue, children: resolved.children)
         }
         return resolved
@@ -76,7 +76,7 @@ public extension RadixNode {
     func resolveRecursive(fetcher: Fetcher) async throws -> Self {
         let resolved = try await resolveRecursiveCommon(fetcher: fetcher)
         if let value = value as? Address {
-            guard let newValue = try await value.resolveRecursive(fetcher: fetcher) as? ValueType else { throw ResolutionErrors.TypeError }
+            guard let newValue = try await value.resolveRecursive(fetcher: fetcher) as? ValueType else { throw ResolutionErrors.typeError }
             return Self(prefix: resolved.prefix, value: newValue, children: resolved.children)
         }
         return resolved
@@ -129,10 +129,10 @@ public extension RadixNode {
                     }
                     return .targeted
                 })
-                guard let newValue = try await value.resolve(paths: downstreamPaths, fetcher: fetcher) as? ValueType else { throw ResolutionErrors.TypeError }
+                guard let newValue = try await value.resolve(paths: downstreamPaths, fetcher: fetcher) as? ValueType else { throw ResolutionErrors.typeError }
                 return Self(prefix: resolved.prefix, value: newValue, children: resolved.children)
             }
-            guard let newValue = try await value.resolve(paths: finalNextPaths, fetcher: fetcher) as? ValueType else { throw ResolutionErrors.TypeError }
+            guard let newValue = try await value.resolve(paths: finalNextPaths, fetcher: fetcher) as? ValueType else { throw ResolutionErrors.typeError }
             return Self(prefix: resolved.prefix, value: newValue, children: resolved.children)
         }
         return resolved

@@ -128,6 +128,13 @@ public extension Header {
         return try Self(node: node, key: key)
     }
 
+    func fetchAndDecodeNode(fetcher: Fetcher) async throws -> NodeType {
+        let fetchedData = try await fetcher.fetch(rawCid: rawCID)
+        let decrypted = try decryptIfNeeded(data: fetchedData, fetcher: fetcher)
+        guard let node = NodeType(data: decrypted) else { throw CashewDecodingError.decodeFromDataError }
+        return node
+    }
+
     func reEncryptIfNeeded(node: NodeType, keyProvider: KeyProvider?) throws -> Self {
         guard let info = encryptionInfo, let keyProvider = keyProvider else { return Self(node: node) }
         guard let key = keyProvider.key(for: info.keyHash) else { throw DataErrors.keyNotFound }

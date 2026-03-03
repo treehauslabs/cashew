@@ -1,5 +1,5 @@
 public enum ResolutionErrors: Error {
-    case TypeError
+    case typeError
 }
 
 

@@ -7,7 +7,7 @@ public extension MerkleDictionary {
     
     func proofForChildren(paths: ArrayTrie<SparseMerkleProof>, fetcher: Fetcher) async throws -> Self {
         let newChildren = ThreadSafeDictionary<Character, ChildType>()
-        let allChildCharacters = Set().union(children.keys).union(paths.childCharacters())
+        let allChildCharacters = Set(children.keys).union(paths.childCharacters())
         try await allChildCharacters.concurrentForEach { childKey in
             guard let child = children[childKey] else {
                 guard let childPath = paths.traverseChild(childKey) else { return }
