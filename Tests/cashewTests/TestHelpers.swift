@@ -47,6 +47,35 @@ class TestKeyProvidingStoreFetcher: TestStoreFetcher, KeyProvidingFetcher {
     }
 }
 
+class CountingStoreFetcher: Storer, Fetcher, @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [String: Data] = [:]
+    private var _fetchCount: Int = 0
+
+    var fetchCount: Int {
+        lock.withLock { _fetchCount }
+    }
+
+    func resetFetchCount() {
+        lock.withLock { _fetchCount = 0 }
+    }
+
+    func store(rawCid: String, data: Data) {
+        lock.withLock {
+            storage[rawCid] = data
+        }
+    }
+
+    func fetch(rawCid: String) async throws -> Data {
+        let data = lock.withLock {
+            _fetchCount += 1
+            return storage[rawCid]
+        }
+        guard let data = data else { throw FetchError.notFound }
+        return data
+    }
+}
+
 enum FetchError: Error {
     case notFound
 }

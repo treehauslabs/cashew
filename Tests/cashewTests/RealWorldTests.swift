@@ -429,6 +429,316 @@ struct LazyCatalogTests {
     }
 }
 
+// MARK: - Event Log with MerkleArray
+
+@Suite("Real-World: Append-Only Event Log")
+struct EventLogTests {
+
+    typealias EventLog = MerkleArrayImpl<String>
+
+    private func buildLog(count: Int) throws -> EventLog {
+        var log = EventLog()
+        for i in 0..<count {
+            log = try log.append("event_\(i):ts=\(1000 + i)")
+        }
+        return log
+    }
+
+    @Test("Event log lifecycle: append, query, version")
+    func testEventLogLifecycle() throws {
+        var log = EventLog()
+        log = try log.append("user.signup:id=1")
+        log = try log.append("user.login:id=1")
+        log = try log.append("order.created:id=100")
+        log = try log.append("order.paid:id=100")
+        #expect(log.count == 4)
+
+        #expect(try log.first() == "user.signup:id=1")
+        #expect(try log.last() == "order.paid:id=100")
+        #expect(try log.get(at: 2) == "order.created:id=100")
+
+        let v1 = HeaderImpl(node: log)
+
+        log = try log.append("user.login:id=1")
+        log = try log.append("order.shipped:id=100")
+        let v2 = HeaderImpl(node: log)
+
+        #expect(v1.rawCID != v2.rawCID)
+        #expect(log.count == 6)
+    }
+
+    @Test("Versioned log: rollback to historical snapshot via CID")
+    func testLogRollback() async throws {
+        let v1 = try buildLog(count: 10)
+        let v1Header = HeaderImpl(node: v1)
+
+        let v2 = try v1.append("event_10:ts=1010").append("event_11:ts=1011")
+        let v2Header = HeaderImpl(node: v2)
+
+        let fetcher = TestStoreFetcher()
+        try v1Header.storeRecursively(storer: fetcher)
+        try v2Header.storeRecursively(storer: fetcher)
+
+        let resolvedV1 = try await HeaderImpl<EventLog>(rawCID: v1Header.rawCID)
+            .resolveRecursive(fetcher: fetcher)
+        #expect(resolvedV1.node!.count == 10)
+        #expect(try resolvedV1.node!.last() == "event_9:ts=1009")
+
+        let resolvedV2 = try await HeaderImpl<EventLog>(rawCID: v2Header.rawCID)
+            .resolveRecursive(fetcher: fetcher)
+        #expect(resolvedV2.node!.count == 12)
+        #expect(try resolvedV2.node!.last() == "event_11:ts=1011")
+    }
+
+    @Test("Range query: paginate event log without loading all events")
+    func testLogPagination() async throws {
+        let log = try buildLog(count: 100)
+        let header = HeaderImpl(node: log)
+        let fetcher = CountingStoreFetcher()
+        try header.storeRecursively(storer: fetcher)
+
+        let resolved = try await HeaderImpl<EventLog>(rawCID: header.rawCID)
+            .resolve(fetcher: fetcher)
+
+        fetcher.resetFetchCount()
+        let page1 = try await resolved.node!.resolve(range: 0..<10, fetcher: fetcher)
+        let page1Fetches = fetcher.fetchCount
+
+        fetcher.resetFetchCount()
+        let page5 = try await resolved.node!.resolve(range: 40..<50, fetcher: fetcher)
+        let page5Fetches = fetcher.fetchCount
+
+        fetcher.resetFetchCount()
+        _ = try await resolved.node!.resolveRecursive(fetcher: fetcher)
+        let fullFetches = fetcher.fetchCount
+
+        for i in 0..<10 {
+            #expect(try page1.get(at: i) == "event_\(i):ts=\(1000 + i)")
+        }
+        for i in 40..<50 {
+            #expect(try page5.get(at: i) == "event_\(i):ts=\(1000 + i)")
+        }
+
+        #expect(page1Fetches < fullFetches / 2)
+        #expect(page5Fetches < fullFetches / 2)
+    }
+
+    @Test("Structural sharing: appending preserves CID of unchanged elements")
+    func testLogStructuralSharing() throws {
+        let log10 = try buildLog(count: 10)
+        let log11 = try log10.append("event_10:ts=1010")
+
+        let h10 = HeaderImpl(node: log10)
+        let h11 = HeaderImpl(node: log11)
+        #expect(h10.rawCID != h11.rawCID)
+
+        #expect(try log10.get(at: 0) == log11.get(at: 0))
+        #expect(try log10.get(at: 5) == log11.get(at: 5))
+        #expect(try log10.get(at: 9) == log11.get(at: 9))
+        #expect(log11.count == 11)
+    }
+
+    @Test("Store and resolve log from CID-only reference")
+    func testLogStoreAndResolve() async throws {
+        let log = try buildLog(count: 25)
+        let header = HeaderImpl(node: log)
+        let fetcher = TestStoreFetcher()
+        try header.storeRecursively(storer: fetcher)
+
+        let resolved = try await HeaderImpl<EventLog>(rawCID: header.rawCID)
+            .resolveRecursive(fetcher: fetcher)
+
+        #expect(resolved.rawCID == header.rawCID)
+        #expect(resolved.node!.count == 25)
+        #expect(try resolved.node!.first() == "event_0:ts=1000")
+        #expect(try resolved.node!.last() == "event_24:ts=1024")
+    }
+}
+
+// MARK: - Time-Series with Nested MerkleArrays
+
+@Suite("Real-World: Time-Series Sensor Data")
+struct TimeSeriesTests {
+
+    typealias Reading = MerkleArrayImpl<String>
+    typealias SensorLog = MerkleArrayImpl<HeaderImpl<Reading>>
+
+    @Test("Multi-sensor time-series: build, store, range query per sensor")
+    func testMultiSensorTimeSeries() async throws {
+        var sensorLog = SensorLog()
+        let fetcher = CountingStoreFetcher()
+
+        for sensor in 0..<5 {
+            var readings = Reading()
+            for t in 0..<20 {
+                readings = try readings.append("s\(sensor)_t\(t)_val=\(sensor * 100 + t)")
+            }
+            let readingsHeader = HeaderImpl(node: readings)
+            try readingsHeader.storeRecursively(storer: fetcher)
+            sensorLog = try sensorLog.append(readingsHeader)
+        }
+        let header = HeaderImpl(node: sensorLog)
+        try header.storeRecursively(storer: fetcher)
+
+        let resolved = try await HeaderImpl<SensorLog>(rawCID: header.rawCID)
+            .resolve(fetcher: fetcher)
+
+        fetcher.resetFetchCount()
+        let partial = try await resolved.node!.resolve(
+            range: 1..<3, innerRange: 5..<10, fetcher: fetcher
+        )
+        let partialFetches = fetcher.fetchCount
+
+        let sensor1 = try partial.get(at: 1)!
+        #expect(try sensor1.node!.get(at: 5) == "s1_t5_val=105")
+        #expect(try sensor1.node!.get(at: 9) == "s1_t9_val=109")
+
+        let sensor2 = try partial.get(at: 2)!
+        #expect(try sensor2.node!.get(at: 5) == "s2_t5_val=205")
+
+        fetcher.resetFetchCount()
+        _ = try await resolved.node!.resolveRecursive(fetcher: fetcher)
+        let fullFetches = fetcher.fetchCount
+
+        #expect(partialFetches < fullFetches)
+    }
+
+    @Test("Nested range transforms: update readings across sensors")
+    func testNestedRangeTransform() throws {
+        var sensorLog = SensorLog()
+        for sensor in 0..<3 {
+            var readings = Reading()
+            for t in 0..<5 {
+                readings = try readings.append("s\(sensor)_t\(t)")
+            }
+            sensorLog = try sensorLog.append(HeaderImpl(node: readings))
+        }
+
+        let innerTransforms: [[String]: Transform] = [
+            [Reading.binaryKey(2)]: .update("CALIBRATED")
+        ]
+        let result = try sensorLog.transformNested(
+            outerRange: 0..<3, innerTransforms: innerTransforms
+        )!
+
+        for sensor in 0..<3 {
+            let sensorData = try result.get(at: sensor)!
+            #expect(try sensorData.node!.get(at: 2) == "CALIBRATED")
+            #expect(try sensorData.node!.get(at: 0) == "s\(sensor)_t0")
+            #expect(try sensorData.node!.get(at: 4) == "s\(sensor)_t4")
+        }
+    }
+
+    @Test("Append new readings to one sensor, others share structure")
+    func testAppendToOneSensor() throws {
+        var readings0 = try Reading().append("r0_0").append("r0_1")
+        var readings1 = try Reading().append("r1_0").append("r1_1")
+        let h0 = HeaderImpl(node: readings0)
+        let h1 = HeaderImpl(node: readings1)
+
+        let v1 = try SensorLog().append(h0).append(h1)
+        let v1Header = HeaderImpl(node: v1)
+
+        readings0 = try readings0.append("r0_2")
+        let newH0 = HeaderImpl(node: readings0)
+        let v2 = try v1.mutating(at: 0, value: newH0)
+        let v2Header = HeaderImpl(node: v2)
+
+        #expect(v1Header.rawCID != v2Header.rawCID)
+
+        let sensor1v1 = try v1.get(at: 1)!
+        let sensor1v2 = try v2.get(at: 1)!
+        #expect(sensor1v1.rawCID == sensor1v2.rawCID)
+    }
+}
+
+// MARK: - Chat History with MerkleArray
+
+@Suite("Real-World: Chat Message History")
+struct ChatHistoryTests {
+
+    typealias MessageLog = MerkleArrayImpl<String>
+    typealias ChannelStore = MerkleDictionaryImpl<HeaderImpl<MessageLog>>
+
+    @Test("Multi-channel chat: append messages, query by channel, range pagination")
+    func testMultiChannelChat() async throws {
+        var general = MessageLog()
+        general = try general.append("alice: hello everyone")
+        general = try general.append("bob: hi alice")
+        general = try general.append("charlie: hey!")
+        general = try general.append("alice: how's the project?")
+        general = try general.append("bob: going well")
+
+        var random = MessageLog()
+        random = try random.append("dave: anyone for lunch?")
+        random = try random.append("eve: sure!")
+
+        let store = try ChannelStore()
+            .inserting(key: "general", value: HeaderImpl(node: general))
+            .inserting(key: "random", value: HeaderImpl(node: random))
+
+        let header = HeaderImpl(node: store)
+        let fetcher = TestStoreFetcher()
+        try header.storeRecursively(storer: fetcher)
+
+        let resolved = try await HeaderImpl<ChannelStore>(rawCID: header.rawCID)
+            .resolveRecursive(fetcher: fetcher)
+
+        let generalResolved = try resolved.node!.get(key: "general")!
+        #expect(generalResolved.node!.count == 5)
+        #expect(try generalResolved.node!.first() == "alice: hello everyone")
+        #expect(try generalResolved.node!.last() == "bob: going well")
+
+        let randomResolved = try resolved.node!.get(key: "random")!
+        #expect(randomResolved.node!.count == 2)
+    }
+
+    @Test("Chat pagination: load only last N messages from a channel")
+    func testChatPagination() async throws {
+        var messages = MessageLog()
+        for i in 0..<50 {
+            messages = try messages.append("msg_\(i)")
+        }
+
+        let header = HeaderImpl(node: messages)
+        let fetcher = CountingStoreFetcher()
+        try header.storeRecursively(storer: fetcher)
+
+        let resolved = try await HeaderImpl<MessageLog>(rawCID: header.rawCID)
+            .resolve(fetcher: fetcher)
+
+        fetcher.resetFetchCount()
+        let lastPage = try await resolved.node!.resolve(range: 40..<50, fetcher: fetcher)
+        let pageFetches = fetcher.fetchCount
+
+        for i in 40..<50 {
+            #expect(try lastPage.get(at: i) == "msg_\(i)")
+        }
+
+        fetcher.resetFetchCount()
+        _ = try await resolved.node!.resolveRecursive(fetcher: fetcher)
+        let fullFetches = fetcher.fetchCount
+
+        #expect(pageFetches < fullFetches / 2)
+    }
+
+    @Test("Versioned chat: each message append produces new root CID")
+    func testVersionedChat() throws {
+        let v0 = MessageLog()
+        let v1 = try v0.append("first message")
+        let v2 = try v1.append("second message")
+        let v3 = try v2.append("third message")
+
+        let h0 = HeaderImpl(node: v0)
+        let h1 = HeaderImpl(node: v1)
+        let h2 = HeaderImpl(node: v2)
+        let h3 = HeaderImpl(node: v3)
+
+        let cids = [h0.rawCID, h1.rawCID, h2.rawCID, h3.rawCID]
+        #expect(Set(cids).count == 4)
+    }
+}
+
 // MARK: - Audit Trail with Merkle Proofs
 
 @Suite("Real-World: Audit Trail with Merkle Proofs")

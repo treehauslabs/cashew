@@ -45,6 +45,7 @@ Most key-value stores treat data as a mutable blob. Cashew treats data as an imm
 | **Transform** | Mutate the structure (insert/update/delete). Returns a new tree with new CIDs for changed nodes. |
 | **Proof** | Generate a minimal subtree proving a key exists, doesn't exist, or can be modified. |
 | **MerkleDictionary** | The top-level key-value map. Dispatches by first character to a compressed radix trie. |
+| **MerkleArray** | Append-only ordered collection backed by a `MerkleDictionary` with UInt256 binary keys. Supports efficient range queries. |
 
 ## Installation
 
@@ -182,6 +183,89 @@ transforms.set(["user1", "name"], value: .update("Alicia"))
 
 let updated = try outer.transform(transforms: transforms)
 // The nested dictionary gets a new CID, which changes the parent's CID
+```
+
+### MerkleArray
+
+An ordered, append-only collection backed by a `MerkleDictionary` with 256-bit binary string keys. Indices are encoded as 256-character strings of `0` and `1`, so lexicographic order matches numeric order and the radix trie compresses sequential indices efficiently.
+
+```swift
+import cashew
+
+var log = MerkleArrayImpl<String>()
+log = try log.append("event_1")
+log = try log.append("event_2")
+log = try log.append("event_3")
+
+let first = try log.first()   // "event_1"
+let last = try log.last()     // "event_3"
+let val = try log.get(at: 1)  // "event_2"
+log.count                      // 3
+```
+
+Mutate and delete by index:
+
+```swift
+log = try log.mutating(at: 1, value: "event_2_updated")
+log = try log.deleting(at: 0)  // swaps with last element to maintain contiguous indices
+```
+
+Concatenate two arrays:
+
+```swift
+var batch = MerkleArrayImpl<String>()
+batch = try batch.append("new_1").append("new_2")
+log = try log.append(contentsOf: batch)
+```
+
+#### Range Queries
+
+Resolve only a slice of a stored array — fetches `O(k)` nodes, not `O(n)`:
+
+```swift
+let header = HeaderImpl(node: log)
+try header.storeRecursively(storer: myStore)
+
+let resolved = try await HeaderImpl<MerkleArrayImpl<String>>(rawCID: header.rawCID)
+    .resolve(fetcher: myFetcher)
+
+// Load only indices 10..<20 from a 1000-element array
+let page = try await resolved.node!.resolve(range: 10..<20, fetcher: myFetcher)
+```
+
+#### Nested Arrays and Chained Range Queries
+
+Values can be `Header` types wrapping inner `MerkleArray`s. Range queries chain through both levels:
+
+```swift
+typealias InnerArray = MerkleArrayImpl<String>
+typealias OuterArray = MerkleArrayImpl<HeaderImpl<InnerArray>>
+
+// Resolve outer[2..<5] and for each, resolve inner[0..<10]
+let page = try await outer.resolve(
+    range: 2..<5, innerRange: 0..<10, fetcher: myFetcher
+)
+```
+
+Apply transforms across a range of nested arrays:
+
+```swift
+let innerTransforms: [[String]: Transform] = [
+    [InnerArray.binaryKey(3)]: .update("new_value")
+]
+// Updates index 3 in every inner array at outer indices 0..<4
+let result = try outer.transformNested(
+    outerRange: 0..<4, innerTransforms: innerTransforms
+)
+```
+
+Or build the full path manually for selective transforms:
+
+```swift
+var transforms = ArrayTrie<Transform>()
+transforms.set([OuterArray.binaryKey(0), InnerArray.binaryKey(2)], value: .update("changed"))
+transforms.set([OuterArray.binaryKey(1), InnerArray.binaryKey(5)], value: .delete)
+let result = try outer.transform(transforms: transforms)
 ```
 
 ### Encryption
@@ -340,6 +424,18 @@ Use targeted encryption on `MerkleDictionaryImpl<HeaderImpl<TestScalar>>` to enc
 
 Build a 3-level hierarchy (catalog → categories → products). Demonstrate resolution strategies: `.list` loads category structure with values still CID-only, `.targeted` resolves a single category, `.recursive` loads an entire subtree.
 
+### Append-Only Event Log
+
+Use `MerkleArrayImpl<String>` as an append-only event log. Each append produces a new root CID. Range queries enable pagination — load only the events you need. Structural sharing means appending one event only changes the trie branch for the new index.
+
+### Time-Series Sensor Data
+
+Model multi-sensor time-series as `MerkleArrayImpl<HeaderImpl<MerkleArrayImpl<String>>>` — an outer array of sensors, each containing an inner array of readings. Chained range queries load readings 5..10 from sensors 1..3 without touching the rest. Nested transforms apply calibration updates across all sensors in one pass.
+
+### Chat Message History
+
+Combine `MerkleDictionary` (keyed by channel name) with `MerkleArray` (messages per channel). Pagination loads only the last N messages. Every message append produces a new CID for auditable history.
+
 ### Audit Trail with Merkle Proofs
 
 Build a transaction ledger and generate existence/insertion/deletion proofs. Proofs from CID-only headers are minimal — only the path to the target key is materialized; unrelated branches stay as CID stubs.
@@ -356,6 +452,7 @@ Build a transaction ledger and generate existence/insertion/deletion proofs. Pro
 | `RadixNode` | `Node` | Compressed trie node with `prefix`, optional `value`, and `children`. |
 | `RadixHeader` | `Header` | Header constrained to `RadixNode`. |
 | `MerkleDictionary` | `Node` | Top-level key-value map. Dispatches by first character to `RadixHeader` children. |
+| `MerkleArray` | `Node` | Ordered append-only collection backed by `MerkleDictionary` with UInt256 binary keys. |
 | `Scalar` | `Node` | Leaf node with no children. Returns empty for `properties()`. |
 | `Fetcher` | `Sendable` | Async data retrieval by CID. One method: `fetch(rawCid:) async throws -> Data`. |
 | `Storer` | -- | Data persistence by CID. One method: `store(rawCid:data:) throws`. |
@@ -386,6 +483,7 @@ Build a transaction ledger and generate existence/insertion/deletion proofs. Pro
 | Type | Purpose |
 |------|---------|
 | `MerkleDictionaryImpl<V>` | Concrete `MerkleDictionary`. `V` must be `Codable + Sendable + LosslessStringConvertible`. |
+| `MerkleArrayImpl<V>` | Concrete `MerkleArray`. Same constraints as `MerkleDictionaryImpl`. |
 | `RadixNodeImpl<V>` | Concrete `RadixNode` with JSON coding for `Character`-keyed children. |
 | `HeaderImpl<N>` | Generic `Header` wrapping any `Node` type. |
 | `RadixHeaderImpl<V>` | `RadixHeader` for `RadixNodeImpl<V>`. |
@@ -426,13 +524,14 @@ Node (base: Codable + LosslessStringConvertible + Sendable)
   |-- Scalar (leaf node, no children)
   |-- RadixNode (compressed trie node)
   |-- MerkleDictionary (top-level key-value map)
+  |-- MerkleArray (ordered collection, backed by MerkleDictionary)
 
 Address (Sendable, supports resolve/proof/transform/store/encrypt)
   |-- Header (Codable, wraps a Node with its CID + optional EncryptionInfo)
       |-- RadixHeader (Header constrained to RadixNode)
 ```
 
-Concrete implementations: `MerkleDictionaryImpl<V>`, `RadixNodeImpl<V>`, `HeaderImpl<N>`, `RadixHeaderImpl<V>`.
+Concrete implementations: `MerkleDictionaryImpl<V>`, `MerkleArrayImpl<V>`, `RadixNodeImpl<V>`, `HeaderImpl<N>`, `RadixHeaderImpl<V>`.
 
 ### How the Trie Works
 
@@ -480,7 +579,7 @@ Sources/cashew/
 swift test
 ```
 
-327 tests across 38 suites covering resolution, transforms, proofs, headers, key enumeration, encryption, and real-world scenarios.
+Tests cover resolution, transforms, proofs, headers, key enumeration, encryption, arrays, range query performance, and real-world scenarios.
 
 ## License
 
