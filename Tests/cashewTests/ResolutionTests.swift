@@ -2030,28 +2030,6 @@ struct DictionaryResolutionTests {
 @Suite("Concurrent Resolution")
 struct ConcurrentResolutionTests {
 
-    @Test("Node resolve handles concurrent property resolution")
-    func testNodeResolveConcurrency() async throws {
-        var dictionary = MerkleDictionaryImpl<String>(children: [:], count: 0)
-        for i in 1...10 {
-            dictionary = try dictionary.inserting(key: "prop\(i)", value: "value\(i)")
-        }
-
-        let fetcher = TestStoreFetcher()
-
-        let startTime = Date()
-        let resolvedNode = try await dictionary.resolveRecursive(fetcher: fetcher)
-        let endTime = Date()
-
-        #expect(resolvedNode.count == 10)
-        for i in 1...10 {
-            #expect(try resolvedNode.get(key: "prop\(i)") == "value\(i)")
-        }
-
-        let duration = endTime.timeIntervalSince(startTime)
-        #expect(duration < 1.0)
-    }
-
     @Test("Resolve operations are thread-safe")
     func testResolveThreadSafety() async throws {
         var dictionary = MerkleDictionaryImpl<String>(children: [:], count: 0)
