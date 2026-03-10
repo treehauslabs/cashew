@@ -75,16 +75,82 @@ public extension MerkleDictionary {
     
     private func collectKeysAndValues(from node: ChildType.NodeType, currentPath: String, into keysAndValues: inout [String: ValueType]) throws {
         let fullPath = currentPath + node.prefix
-        
+
         // If this node has a value, it represents a complete key-value pair
         if let value = node.value {
             keysAndValues[fullPath] = value
         }
-        
+
         // Recursively traverse children
         for (_, child) in node.children {
             guard let childNode = child.node else { throw DataErrors.nodeNotAvailable }
             try collectKeysAndValues(from: childNode, currentPath: fullPath, into: &keysAndValues)
+        }
+    }
+
+    func sortedKeys(limit: Int = .max, after: String? = nil) throws -> [String] {
+        var result = [String]()
+        for char in children.keys.sorted() {
+            guard let node = children[char]?.node else { throw DataErrors.nodeNotAvailable }
+            try collectKeysSorted(from: node, currentPath: "", limit: limit, after: after, into: &result)
+            if result.count >= limit { break }
+        }
+        return result
+    }
+
+    func sortedKeysAndValues(limit: Int = .max, after: String? = nil) throws -> [(key: String, value: ValueType)] {
+        var result = [(key: String, value: ValueType)]()
+        for char in children.keys.sorted() {
+            guard let node = children[char]?.node else { throw DataErrors.nodeNotAvailable }
+            try collectKeysAndValuesSorted(from: node, currentPath: "", limit: limit, after: after, into: &result)
+            if result.count >= limit { break }
+        }
+        return result
+    }
+
+    private func collectKeysSorted(from node: ChildType.NodeType, currentPath: String, limit: Int, after: String?, into result: inout [String]) throws {
+        guard result.count < limit else { return }
+        let fullPath = currentPath + node.prefix
+
+        if node.value != nil {
+            if let after = after {
+                if fullPath > after {
+                    result.append(fullPath)
+                }
+            } else {
+                result.append(fullPath)
+            }
+        }
+
+        guard result.count < limit else { return }
+
+        for char in node.children.keys.sorted() {
+            guard let childNode = node.children[char]?.node else { throw DataErrors.nodeNotAvailable }
+            try collectKeysSorted(from: childNode, currentPath: fullPath, limit: limit, after: after, into: &result)
+            if result.count >= limit { return }
+        }
+    }
+
+    private func collectKeysAndValuesSorted(from node: ChildType.NodeType, currentPath: String, limit: Int, after: String?, into result: inout [(key: String, value: ValueType)]) throws {
+        guard result.count < limit else { return }
+        let fullPath = currentPath + node.prefix
+
+        if let value = node.value {
+            if let after = after {
+                if fullPath > after {
+                    result.append((key: fullPath, value: value))
+                }
+            } else {
+                result.append((key: fullPath, value: value))
+            }
+        }
+
+        guard result.count < limit else { return }
+
+        for char in node.children.keys.sorted() {
+            guard let childNode = node.children[char]?.node else { throw DataErrors.nodeNotAvailable }
+            try collectKeysAndValuesSorted(from: childNode, currentPath: fullPath, limit: limit, after: after, into: &result)
+            if result.count >= limit { return }
         }
     }
 }

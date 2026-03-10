@@ -46,6 +46,7 @@ Most key-value stores treat data as a mutable blob. Cashew treats data as an imm
 | **Proof** | Generate a minimal subtree proving a key exists, doesn't exist, or can be modified. |
 | **MerkleDictionary** | The top-level key-value map. Dispatches by first character to a compressed radix trie. |
 | **MerkleArray** | Append-only ordered collection backed by a `MerkleDictionary` with UInt256 binary keys. Supports efficient range queries. |
+| **MerkleSet** | Membership-only set backed by a `MerkleDictionary` with empty string sentinels. Supports union, intersection, difference. |
 
 ## Installation
 
@@ -280,6 +281,65 @@ transforms.set([OuterArray.binaryKey(1), InnerArray.binaryKey(5)], value: .delet
 let result = try outer.transform(transforms: transforms)
 ```
 
+### MerkleSet
+
+A membership-only collection backed by `MerkleDictionary` with empty string sentinels as values. Supports standard set operations.
+
+```swift
+import cashew
+
+var set = MerkleSetImpl()
+set = try set.insert("alice")
+set = try set.insert("bob")
+set = try set.insert("charlie")
+
+try set.contains("alice")  // true
+try set.contains("dave")   // false
+set.count                   // 3
+
+let members: Set<String> = try set.members()  // {"alice", "bob", "charlie"}
+
+set = try set.remove("bob")
+try set.contains("bob")  // false
+```
+
+Set operations:
+
+```swift
+let a = try MerkleSetImpl().insert("alice").insert("bob")
+let b = try MerkleSetImpl().insert("bob").insert("charlie")
+
+let union = try a.union(b)                // {"alice", "bob", "charlie"}
+let intersection = try a.intersection(b)  // {"bob"}
+let difference = try a.subtracting(b)     // {"alice"}
+let symDiff = try a.symmetricDifference(b) // {"alice", "charlie"}
+```
+
+`MerkleSet` inherits all `MerkleDictionary` capabilities — content addressability, resolution, encryption, proofs, and transforms all work unchanged.
+
+### Cursor Iteration
+
+`MerkleDictionary` supports sorted key iteration with cursor-based pagination by traversing the radix trie in lexicographic order.
+
+```swift
+var dict = MerkleDictionaryImpl<String>()
+dict = try dict.inserting(key: "cherry", value: "3")
+dict = try dict.inserting(key: "apple", value: "1")
+dict = try dict.inserting(key: "banana", value: "2")
+
+let sorted = try dict.sortedKeys()  // ["apple", "banana", "cherry"]
+let pairs = try dict.sortedKeysAndValues()  // [(key: "apple", value: "1"), ...]
+```
+
+Paginate with `limit` and `after`:
+
+```swift
+let page1 = try dict.sortedKeys(limit: 2)               // ["apple", "banana"]
+let page2 = try dict.sortedKeys(limit: 2, after: "banana") // ["cherry"]
+
+let valuePage = try dict.sortedKeysAndValues(limit: 10, after: lastKey)
+```
+
 ### Encryption
 
 Cashew supports AES-GCM encryption for content-addressable headers. The CID becomes a hash of the ciphertext, so content-addressing guarantees still hold.
@@ -463,8 +523,9 @@ Build a transaction ledger and generate existence/insertion/deletion proofs. Pro
 | `Header` | `Codable`, `Address`, `LosslessStringConvertible` | Wraps a `Node` with its CID and optional `EncryptionInfo`. Can be resolved or unresolved. |
 | `RadixNode` | `Node` | Compressed trie node with `prefix`, optional `value`, and `children`. |
 | `RadixHeader` | `Header` | Header constrained to `RadixNode`. |
-| `MerkleDictionary` | `Node` | Top-level key-value map. Dispatches by first character to `RadixHeader` children. |
+| `MerkleDictionary` | `Node` | Top-level key-value map. Dispatches by first character to `RadixHeader` children. Supports cursor-based sorted iteration. |
 | `MerkleArray` | `Node` | Ordered append-only collection backed by `MerkleDictionary` with UInt256 binary keys. |
+| `MerkleSet` | `MerkleDictionary` | Membership-only set backed by `MerkleDictionary` with empty string sentinels. Set operations: union, intersection, subtracting, symmetricDifference. |
 | `Scalar` | `Node` | Leaf node with no children. Returns empty for `properties()`. |
 | `Fetcher` | `Sendable` | Async data retrieval by CID. One method: `fetch(rawCid:) async throws -> Data`. |
 | `Storer` | -- | Data persistence by CID. One method: `store(rawCid:data:) throws`. |
@@ -496,6 +557,7 @@ Build a transaction ledger and generate existence/insertion/deletion proofs. Pro
 |------|---------|
 | `MerkleDictionaryImpl<V>` | Concrete `MerkleDictionary`. `V` must be `Codable + Sendable + LosslessStringConvertible`. |
 | `MerkleArrayImpl<V>` | Concrete `MerkleArray`. Same constraints as `MerkleDictionaryImpl`. |
+| `MerkleSetImpl` | Concrete `MerkleSet`. Uses `String` values with empty string sentinel. |
 | `RadixNodeImpl<V>` | Concrete `RadixNode` with JSON coding for `Character`-keyed children. |
 | `HeaderImpl<N>` | Generic `Header` wrapping any `Node` type. |
 | `RadixHeaderImpl<V>` | `RadixHeader` for `RadixNodeImpl<V>`. |
@@ -537,13 +599,14 @@ Node (base: Codable + LosslessStringConvertible + Sendable)
   |-- RadixNode (compressed trie node)
   |-- MerkleDictionary (top-level key-value map)
   |-- MerkleArray (ordered collection, backed by MerkleDictionary)
+  |-- MerkleSet (membership set, backed by MerkleDictionary)
 
 Address (Sendable, supports resolve/proof/transform/store/encrypt)
   |-- Header (Codable, wraps a Node with its CID + optional EncryptionInfo)
       |-- RadixHeader (Header constrained to RadixNode)
 ```
 
-Concrete implementations: `MerkleDictionaryImpl<V>`, `MerkleArrayImpl<V>`, `RadixNodeImpl<V>`, `HeaderImpl<N>`, `RadixHeaderImpl<V>`.
+Concrete implementations: `MerkleDictionaryImpl<V>`, `MerkleArrayImpl<V>`, `MerkleSetImpl`, `RadixNodeImpl<V>`, `HeaderImpl<N>`, `RadixHeaderImpl<V>`.
 
 ### How the Trie Works
 
