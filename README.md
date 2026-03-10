@@ -476,6 +476,95 @@ restored.rawCID == enc.rawCID  // true
 
 See [Encryption README](Sources/cashew/Encryption/README.md) for the full reference.
 
+### Query Language
+
+Cashew includes a simple query language for reading and transforming data structures via strings. Queries return a `(Self, CashewResult)` tuple — the possibly-modified structure and the result of the last expression.
+
+```swift
+var dict = MerkleDictionaryImpl<String>()
+
+// Build up data and query in one pipeline
+let (updated, result) = try dict.query("""
+    insert "alice" = "engineer" | insert "bob" = "designer" | keys sorted
+""")
+// result == .list(["alice", "bob"])
+// updated has both keys inserted
+```
+
+#### Commands
+
+| Command | Example | Result |
+|---------|---------|--------|
+| `get "key"` | `get "alice"` | `.value("engineer")` |
+| `keys` | `keys` | `.list(["alice", "bob"])` |
+| `keys sorted` | `keys sorted limit 5 after "a"` | `.list([...])` |
+| `values` | `values` | `.entries([...])` |
+| `values sorted` | `values sorted limit 10` | `.entries([...])` |
+| `count` | `count` | `.count(2)` |
+| `contains "key"` | `contains "alice"` | `.bool(true)` |
+| `insert "key" = "val"` | `insert "alice" = "engineer"` | `.ok` |
+| `update "key" = "val"` | `update "alice" = "lead"` | `.ok` |
+| `set "key" = "val"` | `set "alice" = "cto"` | `.ok` (insert or update) |
+| `delete "key"` | `delete "alice"` | `.ok` |
+
+Array-specific (on `MerkleArray`):
+
+| Command | Example | Result |
+|---------|---------|--------|
+| `get at <n>` | `get at 0` | `.value("first")` |
+| `first` | `first` | `.value("first")` |
+| `last` | `last` | `.value("last")` |
+| `append "val"` | `append "new"` | `.ok` |
+
+Aliases: `members` = `keys`, `size` = `count`, `has` = `contains`, `add` = `insert`, `remove`/`delete`, `put` = `set`.
+
+#### Pipelines
+
+Chain expressions with `|` to build up data and query it:
+
+```swift
+let (_, result) = try MerkleDictionaryImpl<String>().query("""
+    insert "cherry" = "3" | insert "apple" = "1" | insert "banana" = "2" | keys sorted limit 2
+""")
+// result == .list(["apple", "banana"])
+```
+
+```swift
+let (arr, result) = try MerkleArrayImpl<String>().query("""
+    append "hello" | append "world" | first
+""")
+// result == .value("hello"), arr.count == 2
+```
+
+#### Execution Model
+
+Queries compile into a `CashewPlan` that batches consecutive transforms into a single `ArrayTrie<Transform>`, applied in one pass via the existing `transform(transforms:)` machinery. Reads flush pending transforms first.
+
+```swift
+// These three inserts compile into ONE ArrayTrie<Transform> step, not three separate tree rebuilds
+let (dict, _) = try MerkleDictionaryImpl<String>().query("""
+    insert "a" = "1" | insert "b" = "2" | insert "c" = "3"
+""")
+```
+
+For lazy-loaded data, the plan computes resolution paths automatically. Use the async variant with a fetcher to resolve before executing:
+
+```swift
+// Computes resolution paths: ["alice"] → .targeted
+// Resolves needed nodes from store, then executes the query
+let (_, result) = try await unresolvedDict.query(#"get "alice""#, fetcher: myFetcher)
+```
+
+You can also inspect or use the plan directly:
+
+```swift
+let expressions = try CashewParser.parse(#"insert "a" = "1" | get "a""#)
+let plan = CashewPlan.compile(expressions)
+
+plan.steps        // [.transform(trie), .evaluate(.get("a"))]
+plan.resolutionPaths()  // ArrayTrie with ["a"] → .targeted
+```
+
 ## Real-World Examples
 
 The test suite includes scenario-based tests that demonstrate practical usage patterns. See `Tests/cashewTests/RealWorldTests.swift` for the full implementations.
