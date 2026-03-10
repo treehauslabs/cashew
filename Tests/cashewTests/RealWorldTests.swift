@@ -501,11 +501,11 @@ struct EventLogTests {
             .resolve(fetcher: fetcher)
 
         fetcher.resetFetchCount()
-        let page1 = try await resolved.node!.resolve(range: 0..<10, fetcher: fetcher)
+        let page1 = try await resolved.node!.resolve(paths: EventLog.rangePaths(0..<10), fetcher: fetcher)
         let page1Fetches = fetcher.fetchCount
 
         fetcher.resetFetchCount()
-        let page5 = try await resolved.node!.resolve(range: 40..<50, fetcher: fetcher)
+        let page5 = try await resolved.node!.resolve(paths: EventLog.rangePaths(40..<50), fetcher: fetcher)
         let page5Fetches = fetcher.fetchCount
 
         fetcher.resetFetchCount()
@@ -585,7 +585,7 @@ struct TimeSeriesTests {
 
         fetcher.resetFetchCount()
         let partial = try await resolved.node!.resolve(
-            range: 1..<3, innerRange: 5..<10, fetcher: fetcher
+            paths: SensorLog.rangePaths(1..<3, innerStrategy: .range(5..<10)), fetcher: fetcher
         )
         let partialFetches = fetcher.fetchCount
 
@@ -708,7 +708,7 @@ struct ChatHistoryTests {
             .resolve(fetcher: fetcher)
 
         fetcher.resetFetchCount()
-        let lastPage = try await resolved.node!.resolve(range: 40..<50, fetcher: fetcher)
+        let lastPage = try await resolved.node!.resolve(paths: MessageLog.rangePaths(40..<50), fetcher: fetcher)
         let pageFetches = fetcher.fetchCount
 
         for i in 40..<50 {

@@ -5,9 +5,7 @@ import Crypto
 @testable import cashew
 
 typealias StringArray = MerkleArrayImpl<String>
-typealias ScalarArray = MerkleArrayImpl<ScalarHeader>
-typealias InnerArray = MerkleArrayImpl<String>
-typealias OuterArray = MerkleArrayImpl<HeaderImpl<InnerArray>>
+typealias OuterArray = MerkleArrayImpl<HeaderImpl<StringArray>>
 
 @Suite("MerkleArray Basics")
 struct MerkleArrayBasicsTests {
@@ -130,6 +128,95 @@ struct MerkleArrayBasicsTests {
         let h1 = HeaderImpl(node: arr1)
         let h2 = HeaderImpl(node: arr2)
         #expect(h1.rawCID != h2.rawCID)
+    }
+}
+
+@Suite("MerkleArray as MerkleDictionary")
+struct MerkleArrayAsDictionaryTests {
+
+    @Test("allKeys returns binary keys for all indices")
+    func testAllKeys() throws {
+        let arr = try StringArray().append("a").append("b").append("c")
+        let keys = try arr.allKeys()
+        #expect(keys.count == 3)
+        #expect(keys.contains(StringArray.binaryKey(0)))
+        #expect(keys.contains(StringArray.binaryKey(1)))
+        #expect(keys.contains(StringArray.binaryKey(2)))
+    }
+
+    @Test("allKeysAndValues returns index-keyed entries")
+    func testAllKeysAndValues() throws {
+        let arr = try StringArray().append("x").append("y")
+        let kv = try arr.allKeysAndValues()
+        #expect(kv.count == 2)
+        #expect(kv[StringArray.binaryKey(0)] == "x")
+        #expect(kv[StringArray.binaryKey(1)] == "y")
+    }
+
+    @Test("get(key:) works with binary key directly")
+    func testGetByKey() throws {
+        let arr = try StringArray().append("hello").append("world")
+        let key1 = StringArray.binaryKey(1)
+        #expect(try arr.get(key: key1) == "world")
+    }
+
+    @Test("inserting(key:value:) works with binary key directly")
+    func testInsertByKey() throws {
+        let arr = StringArray()
+        let key = StringArray.binaryKey(0)
+        let result = try arr.inserting(key: key, value: "direct")
+        #expect(try result.get(key: key) == "direct")
+    }
+
+    @Test("Targeted resolution strategy on array")
+    func testTargetedResolution() async throws {
+        var arr = StringArray()
+        for i in 0..<5 { arr = try arr.append("v\(i)") }
+        let header = HeaderImpl(node: arr)
+        let fetcher = TestStoreFetcher()
+        try header.storeRecursively(storer: fetcher)
+
+        let unresolved = HeaderImpl<StringArray>(rawCID: header.rawCID)
+        let resolved = try await unresolved.resolve(fetcher: fetcher)
+
+        var paths = ArrayTrie<ResolutionStrategy>()
+        paths.set([StringArray.binaryKey(2)], value: .targeted)
+        let partial = try await resolved.node!.resolve(paths: paths, fetcher: fetcher)
+        #expect(try partial.get(at: 2) == "v2")
+    }
+
+    @Test("List resolution strategy on array")
+    func testListResolution() async throws {
+        let arr = try StringArray().append("a").append("b")
+        let header = HeaderImpl(node: arr)
+        let fetcher = TestStoreFetcher()
+        try header.storeRecursively(storer: fetcher)
+
+        let unresolved = HeaderImpl<StringArray>(rawCID: header.rawCID)
+        let resolved = try await unresolved.resolve(fetcher: fetcher)
+
+        var paths = ArrayTrie<ResolutionStrategy>()
+        paths.set([""], value: .list)
+        let listed = try await resolved.node!.resolve(paths: paths, fetcher: fetcher)
+        #expect(listed.count == 2)
+    }
+
+    @Test("Recursive resolution strategy on array")
+    func testRecursiveResolution() async throws {
+        let arr = try StringArray().append("p").append("q").append("r")
+        let header = HeaderImpl(node: arr)
+        let fetcher = TestStoreFetcher()
+        try header.storeRecursively(storer: fetcher)
+
+        let unresolved = HeaderImpl<StringArray>(rawCID: header.rawCID)
+        let resolved = try await unresolved.resolve(fetcher: fetcher)
+
+        var paths = ArrayTrie<ResolutionStrategy>()
+        paths.set([""], value: .recursive)
+        let full = try await resolved.node!.resolve(paths: paths, fetcher: fetcher)
+        #expect(try full.get(at: 0) == "p")
+        #expect(try full.get(at: 1) == "q")
+        #expect(try full.get(at: 2) == "r")
     }
 }
 
@@ -273,7 +360,7 @@ struct MerkleArrayRangeResolutionTests {
 
         let unresolved = HeaderImpl<StringArray>(rawCID: header.rawCID)
         let resolved = try await unresolved.resolve(fetcher: fetcher)
-        let rangeResolved = try await resolved.node!.resolve(range: 3..<6, fetcher: fetcher)
+        let rangeResolved = try await resolved.node!.resolve(paths: StringArray.rangePaths(3..<6), fetcher: fetcher)
 
         #expect(rangeResolved.count == 10)
         #expect(try rangeResolved.get(at: 3) == "val3")
@@ -289,7 +376,7 @@ struct MerkleArrayRangeResolutionTests {
         try header.storeRecursively(storer: fetcher)
 
         let resolved = try await HeaderImpl<StringArray>(rawCID: header.rawCID).resolve(fetcher: fetcher)
-        let rangeResolved = try await resolved.node!.resolve(range: -5..<100, fetcher: fetcher)
+        let rangeResolved = try await resolved.node!.resolve(paths: StringArray.rangePaths(-5..<100), fetcher: fetcher)
         #expect(rangeResolved.count == 3)
         #expect(try rangeResolved.get(at: 0) == "a")
         #expect(try rangeResolved.get(at: 2) == "c")
@@ -298,14 +385,14 @@ struct MerkleArrayRangeResolutionTests {
     @Test("Empty range returns self")
     func testEmptyRange() async throws {
         let arr = try StringArray().append("a")
-        let result = try await arr.resolve(range: 5..<5, fetcher: TestStoreFetcher())
+        let result = try await arr.resolve(paths: StringArray.rangePaths(5..<5), fetcher: TestStoreFetcher())
         #expect(result.count == 1)
     }
 
     @Test("Range resolve with recursive inner strategy")
     func testRangeResolveRecursiveStrategy() async throws {
-        let inner1 = try InnerArray().append("x").append("y")
-        let inner2 = try InnerArray().append("p").append("q")
+        let inner1 = try StringArray().append("x").append("y")
+        let inner2 = try StringArray().append("p").append("q")
         let h1 = HeaderImpl(node: inner1)
         let h2 = HeaderImpl(node: inner2)
 
@@ -320,7 +407,7 @@ struct MerkleArrayRangeResolutionTests {
 
         let unresolved = HeaderImpl<OuterArray>(rawCID: header.rawCID)
         let resolved = try await unresolved.resolve(fetcher: fetcher)
-        let rangeResolved = try await resolved.node!.resolve(range: 0..<1, innerStrategy: .recursive, fetcher: fetcher)
+        let rangeResolved = try await resolved.node!.resolve(paths: OuterArray.rangePaths(0..<1, innerStrategy: .recursive), fetcher: fetcher)
 
         let element = try rangeResolved.get(at: 0)
         #expect(element != nil)
@@ -334,9 +421,9 @@ struct MerkleArrayNestedRangeTests {
 
     @Test("Nested range resolve: outer range + inner range")
     func testNestedRangeResolve() async throws {
-        let inner1 = try InnerArray().append("a0").append("a1").append("a2").append("a3")
-        let inner2 = try InnerArray().append("b0").append("b1").append("b2").append("b3")
-        let inner3 = try InnerArray().append("c0").append("c1").append("c2").append("c3")
+        let inner1 = try StringArray().append("a0").append("a1").append("a2").append("a3")
+        let inner2 = try StringArray().append("b0").append("b1").append("b2").append("b3")
+        let inner3 = try StringArray().append("c0").append("c1").append("c2").append("c3")
         let h1 = HeaderImpl(node: inner1)
         let h2 = HeaderImpl(node: inner2)
         let h3 = HeaderImpl(node: inner3)
@@ -351,7 +438,7 @@ struct MerkleArrayNestedRangeTests {
 
         let unresolved = HeaderImpl<OuterArray>(rawCID: header.rawCID)
         let resolved = try await unresolved.resolve(fetcher: fetcher)
-        let rangeResolved = try await resolved.node!.resolve(range: 0..<2, innerRange: 1..<3, fetcher: fetcher)
+        let rangeResolved = try await resolved.node!.resolve(paths: OuterArray.rangePaths(0..<2, innerStrategy: .range(1..<3)), fetcher: fetcher)
 
         let el0 = try rangeResolved.get(at: 0)
         #expect(el0 != nil)
@@ -366,14 +453,14 @@ struct MerkleArrayNestedRangeTests {
 
     @Test("Nested transforms via ArrayTrie path chaining")
     func testNestedTransformChaining() throws {
-        let inner1 = try InnerArray().append("a0").append("a1").append("a2")
-        let inner2 = try InnerArray().append("b0").append("b1").append("b2")
+        let inner1 = try StringArray().append("a0").append("a1").append("a2")
+        let inner2 = try StringArray().append("b0").append("b1").append("b2")
         let h1 = HeaderImpl(node: inner1)
         let h2 = HeaderImpl(node: inner2)
 
         let outer = try OuterArray().append(h1).append(h2)
 
-        let innerKey1 = InnerArray.binaryKey(1)
+        let innerKey1 = StringArray.binaryKey(1)
 
         let innerTransforms: [[String]: Transform] = [
             [innerKey1]: .update("UPDATED")
@@ -396,14 +483,14 @@ struct MerkleArrayNestedRangeTests {
 
     @Test("Nested range transforms: insert into inner arrays across a range")
     func testNestedRangeInsert() throws {
-        let inner1 = try InnerArray().append("x")
-        let inner2 = try InnerArray().append("y")
+        let inner1 = try StringArray().append("x")
+        let inner2 = try StringArray().append("y")
         let h1 = HeaderImpl(node: inner1)
         let h2 = HeaderImpl(node: inner2)
 
         let outer = try OuterArray().append(h1).append(h2)
 
-        let newKey = InnerArray.binaryKey(1)
+        let newKey = StringArray.binaryKey(1)
         let innerTransforms: [[String]: Transform] = [
             [newKey]: .insert("new")
         ]
@@ -424,15 +511,15 @@ struct MerkleArrayNestedRangeTests {
 
     @Test("Build nested transforms manually via ArrayTrie for full control")
     func testManualNestedTransformViaArrayTrie() throws {
-        let inner1 = try InnerArray().append("a").append("b")
-        let inner2 = try InnerArray().append("c").append("d")
+        let inner1 = try StringArray().append("a").append("b")
+        let inner2 = try StringArray().append("c").append("d")
         let h1 = HeaderImpl(node: inner1)
         let h2 = HeaderImpl(node: inner2)
         let outer = try OuterArray().append(h1).append(h2)
 
         var transforms = ArrayTrie<Transform>()
-        transforms.set([OuterArray.binaryKey(0), InnerArray.binaryKey(0)], value: .update("A"))
-        transforms.set([OuterArray.binaryKey(1), InnerArray.binaryKey(1)], value: .update("D"))
+        transforms.set([OuterArray.binaryKey(0), StringArray.binaryKey(0)], value: .update("A"))
+        transforms.set([OuterArray.binaryKey(1), StringArray.binaryKey(1)], value: .update("D"))
 
         let result = try outer.transform(transforms: transforms)
         #expect(result != nil)
@@ -448,9 +535,9 @@ struct MerkleArrayNestedRangeTests {
 
     @Test("Nested store, resolve range, verify partial load")
     func testNestedStoreAndRangeResolve() async throws {
-        let inner1 = try InnerArray().append("a0").append("a1").append("a2")
-        let inner2 = try InnerArray().append("b0").append("b1").append("b2")
-        let inner3 = try InnerArray().append("c0").append("c1").append("c2")
+        let inner1 = try StringArray().append("a0").append("a1").append("a2")
+        let inner2 = try StringArray().append("b0").append("b1").append("b2")
+        let inner3 = try StringArray().append("c0").append("c1").append("c2")
         let h1 = HeaderImpl(node: inner1)
         let h2 = HeaderImpl(node: inner2)
         let h3 = HeaderImpl(node: inner3)
@@ -466,7 +553,7 @@ struct MerkleArrayNestedRangeTests {
         let listResolved = try await HeaderImpl<OuterArray>(rawCID: header.rawCID)
             .resolveRecursive(fetcher: fetcher)
 
-        let partial = try await listResolved.node!.resolve(range: 1..<2, innerStrategy: .recursive, fetcher: fetcher)
+        let partial = try await listResolved.node!.resolve(paths: OuterArray.rangePaths(1..<2, innerStrategy: .recursive), fetcher: fetcher)
 
         let el1 = try partial.get(at: 1)!
         #expect(try el1.node!.get(at: 0) == "b0")
@@ -625,15 +712,13 @@ struct MerkleArrayBatchTests {
 @Suite("MerkleArray with Header Elements")
 struct MerkleArrayHeaderElementTests {
 
-    typealias ScalarArr = MerkleArrayImpl<HeaderImpl<TestScalar>>
-
     @Test("Array of scalar headers: append, get, mutate")
     func testScalarHeaderArray() throws {
         let h1 = HeaderImpl(node: TestScalar(val: 10))
         let h2 = HeaderImpl(node: TestScalar(val: 20))
         let h3 = HeaderImpl(node: TestScalar(val: 30))
 
-        var arr = try ScalarArr().append(h1).append(h2).append(h3)
+        var arr = try EncryptableArray().append(h1).append(h2).append(h3)
         #expect(arr.count == 3)
         #expect(try arr.get(at: 0)?.node?.val == 10)
         #expect(try arr.get(at: 2)?.node?.val == 30)
@@ -649,12 +734,12 @@ struct MerkleArrayHeaderElementTests {
         let h2 = HeaderImpl(node: TestScalar(val: 2))
         let h3 = HeaderImpl(node: TestScalar(val: 3))
 
-        let arr = try ScalarArr().append(h1).append(h2).append(h3)
+        let arr = try EncryptableArray().append(h1).append(h2).append(h3)
         let header = HeaderImpl(node: arr)
         let fetcher = TestStoreFetcher()
         try header.storeRecursively(storer: fetcher)
 
-        let resolved = try await HeaderImpl<ScalarArr>(rawCID: header.rawCID)
+        let resolved = try await HeaderImpl<EncryptableArray>(rawCID: header.rawCID)
             .resolveRecursive(fetcher: fetcher)
         #expect(resolved.node!.count == 3)
         #expect(try resolved.node!.get(at: 0)?.node?.val == 1)
@@ -664,8 +749,8 @@ struct MerkleArrayHeaderElementTests {
 
     @Test("Nested array: outer array of inner arrays, full lifecycle")
     func testNestedArrayFullLifecycle() async throws {
-        let inner1 = try InnerArray().append("row0col0").append("row0col1")
-        let inner2 = try InnerArray().append("row1col0").append("row1col1")
+        let inner1 = try StringArray().append("row0col0").append("row0col1")
+        let inner2 = try StringArray().append("row1col0").append("row1col1")
         let h1 = HeaderImpl(node: inner1)
         let h2 = HeaderImpl(node: inner2)
 
@@ -687,7 +772,7 @@ struct MerkleArrayHeaderElementTests {
         #expect(try row1.node!.get(at: 0) == "row1col0")
         #expect(try row1.node!.get(at: 1) == "row1col1")
 
-        let newInner = try InnerArray().append("row0col0_updated").append("row0col1")
+        let newInner = try StringArray().append("row0col0_updated").append("row0col1")
         let newH1 = HeaderImpl(node: newInner)
         let mutatedOuter = try outer.mutating(at: 0, value: newH1)
         let mutatedHeader = HeaderImpl(node: mutatedOuter)
@@ -720,7 +805,7 @@ struct MerkleArrayRangeQueryPerformanceTests {
         let topLevelFetches = fetcher.fetchCount
 
         fetcher.resetFetchCount()
-        let rangeResolved = try await resolved.node!.resolve(range: 50..<(50 + k), fetcher: fetcher)
+        let rangeResolved = try await resolved.node!.resolve(paths: StringArray.rangePaths(50..<(50 + k)), fetcher: fetcher)
         let rangeFetches = fetcher.fetchCount
 
         for i in 50..<(50 + k) {
@@ -760,11 +845,11 @@ struct MerkleArrayRangeQueryPerformanceTests {
 
         let rangeSize = 5
         smallFetcher.resetFetchCount()
-        let smallRange = try await smallResolved.node!.resolve(range: 10..<(10 + rangeSize), fetcher: smallFetcher)
+        let smallRange = try await smallResolved.node!.resolve(paths: StringArray.rangePaths(10..<(10 + rangeSize)), fetcher: smallFetcher)
         let smallFetches = smallFetcher.fetchCount
 
         largeFetcher.resetFetchCount()
-        let largeRange = try await largeResolved.node!.resolve(range: 10..<(10 + rangeSize), fetcher: largeFetcher)
+        let largeRange = try await largeResolved.node!.resolve(paths: StringArray.rangePaths(10..<(10 + rangeSize)), fetcher: largeFetcher)
         let largeFetches = largeFetcher.fetchCount
 
         for i in 10..<(10 + rangeSize) {
@@ -814,7 +899,7 @@ struct MerkleArrayRangeQueryPerformanceTests {
         let resolved = try await HeaderImpl<StringArray>(rawCID: header.rawCID).resolve(fetcher: fetcher)
 
         fetcher.resetFetchCount()
-        let rangeResult = try await resolved.node!.resolve(range: 0..<10, fetcher: fetcher)
+        let rangeResult = try await resolved.node!.resolve(paths: StringArray.rangePaths(0..<10), fetcher: fetcher)
         let rangeFetches = fetcher.fetchCount
 
         fetcher.resetFetchCount()
@@ -837,7 +922,7 @@ struct MerkleArrayRangeQueryPerformanceTests {
         let fetcher = CountingStoreFetcher()
 
         for i in 0..<outerSize {
-            var inner = InnerArray()
+            var inner = StringArray()
             for j in 0..<innerSize {
                 inner = try inner.append("[\(i),\(j)]")
             }
@@ -851,7 +936,7 @@ struct MerkleArrayRangeQueryPerformanceTests {
         let resolved = try await HeaderImpl<OuterArray>(rawCID: outerHeader.rawCID).resolve(fetcher: fetcher)
 
         fetcher.resetFetchCount()
-        let rangeResult = try await resolved.node!.resolve(range: 2..<4, innerRange: 5..<8, fetcher: fetcher)
+        let rangeResult = try await resolved.node!.resolve(paths: OuterArray.rangePaths(2..<4, innerStrategy: .range(5..<8)), fetcher: fetcher)
         let rangeFetches = fetcher.fetchCount
 
         let el2 = try rangeResult.get(at: 2)!
@@ -1180,7 +1265,7 @@ struct MerkleArrayEncryptedRangeQueryTests {
 
         let resolved = try await encrypted.removingNode().resolve(fetcher: fetcher)
         let rangeResolved = try await resolved.node!.resolve(
-            range: 5..<8, fetcher: fetcher
+            paths: EncryptableArray.rangePaths(5..<8), fetcher: fetcher
         )
 
         for i in 5..<8 {
@@ -1226,27 +1311,27 @@ struct MerkleArrayEncryptedRangeQueryTests {
 
     @Test("Nested encrypted array: outer encrypted, inner plaintext, range query works")
     func testNestedEncryptedOuterRangeQuery() async throws {
-        typealias InnerScalarArray = MerkleArrayImpl<HeaderImpl<TestScalar>>
-        typealias OuterScalarArray = MerkleArrayImpl<HeaderImpl<InnerScalarArray>>
+        typealias InnerEncryptableArrayay = MerkleArrayImpl<HeaderImpl<TestScalar>>
+        typealias OuterEncryptableArrayay = MerkleArrayImpl<HeaderImpl<InnerEncryptableArrayay>>
 
         let key = SymmetricKey(size: .bits256)
         let fetcher = TestKeyProvidingStoreFetcher()
         fetcher.registerKey(key)
 
-        var inner0 = InnerScalarArray()
+        var inner0 = InnerEncryptableArrayay()
         inner0 = try inner0.append(HeaderImpl(node: TestScalar(val: 10)))
             .append(HeaderImpl(node: TestScalar(val: 11)))
-        var inner1 = InnerScalarArray()
+        var inner1 = InnerEncryptableArrayay()
         inner1 = try inner1.append(HeaderImpl(node: TestScalar(val: 20)))
             .append(HeaderImpl(node: TestScalar(val: 21)))
 
         let h0 = HeaderImpl(node: inner0)
         let h1 = HeaderImpl(node: inner1)
-        let outer = try OuterScalarArray().append(h0).append(h1)
+        let outer = try OuterEncryptableArrayay().append(h0).append(h1)
         let header = HeaderImpl(node: outer)
 
         var encryption = ArrayTrie<EncryptionStrategy>()
-        encryption.set([OuterScalarArray.binaryKey(0)], value: .targeted(key))
+        encryption.set([OuterEncryptableArrayay.binaryKey(0)], value: .targeted(key))
         let encrypted = try header.encrypt(encryption: encryption)
 
         let encVal0 = try encrypted.node!.get(at: 0)!

@@ -9,8 +9,12 @@ public extension MerkleDictionary {
         }
         return try await resolve(paths: pathTrie, fetcher: fetcher)
     }
-    
+
     func resolve(paths: ArrayTrie<ResolutionStrategy>, fetcher: Fetcher) async throws -> Self {
+        return try await resolvePaths(paths, fetcher: fetcher)
+    }
+
+    func resolvePaths(_ paths: ArrayTrie<ResolutionStrategy>, fetcher: Fetcher) async throws -> Self {
         if paths.get([""]) == .recursive {
             return try await resolveRecursive(fetcher: fetcher)
         }
@@ -38,20 +42,20 @@ public extension MerkleDictionary {
         }
         return await Self(children: newProperties.allKeyValuePairs(), count: count)
     }
-    
+
     func resolveRecursive(fetcher: Fetcher) async throws -> Self {
         let newProperties = ThreadSafeDictionary<PathSegment, Address>()
-        
+
         try await properties().concurrentForEach { property in
             if let address = get(property: property) {
                 let resolvedAddress = try await address.resolveRecursive(fetcher: fetcher)
                 await newProperties.set(property, value: resolvedAddress)
             }
         }
-        
+
         return set(properties: await newProperties.allKeyValuePairs())
     }
-    
+
     func resolveList(fetcher: Fetcher) async throws -> Self {
         let newProperties = ThreadSafeDictionary<Character, ChildType>()
 
@@ -60,7 +64,7 @@ public extension MerkleDictionary {
         }
         return await Self(children: newProperties.allKeyValuePairs(), count: count)
     }
-    
+
     func resolve(fetcher: Fetcher) async throws -> Self {
         return self
     }

@@ -220,7 +220,7 @@ log = try log.append(contentsOf: batch)
 
 #### Range Queries
 
-Resolve only a slice of a stored array — fetches `O(k)` nodes, not `O(n)`:
+Range queries use `.range` as a `ResolutionStrategy`, resolved via `resolve(paths:)`. Fetches `O(k)` nodes, not `O(n)`:
 
 ```swift
 let header = HeaderImpl(node: log)
@@ -230,12 +230,23 @@ let resolved = try await HeaderImpl<MerkleArrayImpl<String>>(rawCID: header.rawC
     .resolve(fetcher: myFetcher)
 
 // Load only indices 10..<20 from a 1000-element array
-let page = try await resolved.node!.resolve(range: 10..<20, fetcher: myFetcher)
+let page = try await resolved.node!.resolve(
+    paths: MerkleArrayImpl<String>.rangePaths(10..<20), fetcher: myFetcher
+)
+```
+
+Build custom resolution paths for full control:
+
+```swift
+var paths = ArrayTrie<ResolutionStrategy>()
+paths.set([], value: .range(10..<20))       // expands to .targeted for each index
+paths.set([MerkleArrayImpl<String>.binaryKey(15)], value: .recursive) // override: recursively resolve index 15
+let page = try await resolved.node!.resolve(paths: paths, fetcher: myFetcher)
 ```
 
 #### Nested Arrays and Chained Range Queries
 
-Values can be `Header` types wrapping inner `MerkleArray`s. Range queries chain through both levels:
+Values can be `Header` types wrapping inner `MerkleArray`s. Range queries chain through both levels — `.range` at an outer key flows through to the inner array:
 
 ```swift
 typealias InnerArray = MerkleArrayImpl<String>
@@ -243,7 +254,8 @@ typealias OuterArray = MerkleArrayImpl<HeaderImpl<InnerArray>>
 
 // Resolve outer[2..<5] and for each, resolve inner[0..<10]
 let page = try await outer.resolve(
-    range: 2..<5, innerRange: 0..<10, fetcher: myFetcher
+    paths: OuterArray.rangePaths(2..<5, innerStrategy: .range(0..<10)),
+    fetcher: myFetcher
 )
 ```
 

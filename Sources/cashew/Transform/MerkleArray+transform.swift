@@ -1,19 +1,9 @@
 import ArrayTrie
 
 public extension MerkleArray {
-    func transform(transforms: ArrayTrie<Transform>) throws -> Self? {
-        return try transform(transforms: transforms, keyProvider: nil)
-    }
-
-    func transform(transforms: ArrayTrie<Transform>, keyProvider: KeyProvider?) throws -> Self? {
-        guard let newBacking = try backing.transform(transforms: transforms, keyProvider: keyProvider) else { return nil }
-        return Self(backing: newBacking, count: newBacking.count)
-    }
-
-    func mutating(at index: Int, value: Element) throws -> Self {
+    func mutating(at index: Int, value: ValueType) throws -> Self {
         guard index >= 0 && index < count else { throw TransformErrors.invalidKey }
-        let newBacking = try backing.mutating(key: Self.binaryKey(index), value: value)
-        return Self(backing: newBacking, count: count)
+        return try mutating(key: Self.binaryKey(index), value: value)
     }
 
     func deleting(at index: Int) throws -> Self {
@@ -21,15 +11,14 @@ public extension MerkleArray {
         let key = Self.binaryKey(index)
         let lastKey = Self.binaryKey(count - 1)
         if index == count - 1 {
-            let newBacking = try backing.deleting(key: key)
-            return Self(backing: newBacking, count: count - 1)
+            return try deleting(key: key)
         }
-        guard let lastElement = try backing.get(key: lastKey) else { throw TransformErrors.missingData }
+        guard let lastElement = try get(key: lastKey) else { throw TransformErrors.missingData }
         var transforms = ArrayTrie<Transform>()
         transforms.set([key], value: .update(String(describing: lastElement)))
         transforms.set([lastKey], value: .delete)
-        guard let newBacking = try backing.transform(transforms: transforms) else { throw TransformErrors.transformFailed }
-        return Self(backing: newBacking, count: count - 1)
+        guard let result = try transform(transforms: transforms) else { throw TransformErrors.transformFailed }
+        return result
     }
 
     static func rangeTransforms(range: Range<Int>, transform: Transform) -> ArrayTrie<Transform> {
@@ -41,7 +30,7 @@ public extension MerkleArray {
     }
 }
 
-public extension MerkleArray where Element: Header, Element.NodeType: MerkleArray {
+public extension MerkleArray where ValueType: Header, ValueType.NodeType: MerkleArray {
     static func nestedRangeTransforms(outerRange: Range<Int>, innerTransforms: [[String]: Transform]) -> ArrayTrie<Transform> {
         var trie = ArrayTrie<Transform>()
         for i in outerRange {
