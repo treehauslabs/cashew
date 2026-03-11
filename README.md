@@ -495,7 +495,7 @@ let (updated, result) = try dict.query("""
 
 | Command | Example | Result |
 |---------|---------|--------|
-| `get "key"` | `get "alice"` | `.value("engineer")` |
+| `get "key"` | `get "alice"` | `.value("engineer")` or `.node(child)` if the value is a `Header` |
 | `keys` | `keys` | `.list(["alice", "bob"])` |
 | `keys sorted` | `keys sorted limit 5 after "a"` | `.list([...])` |
 | `values` | `values` | `.entries([...])` |
@@ -534,6 +534,75 @@ let (arr, result) = try MerkleArrayImpl<String>().query("""
     append "hello" | append "world" | first
 """)
 // result == .value("hello"), arr.count == 2
+```
+
+When `get` returns a `.node` (the value is a `Header`), subsequent pipeline steps execute on the child:
+
+```swift
+typealias InnerDict = MerkleDictionaryImpl<String>
+typealias OuterDict = MerkleDictionaryImpl<HeaderImpl<InnerDict>>
+
+let inner = try InnerDict().inserting(key: "role", value: "admin").inserting(key: "dept", value: "eng")
+let outer = try OuterDict().inserting(key: "profile", value: HeaderImpl(node: inner))
+
+let (_, count) = try outer.query(#"get "profile" | count"#)
+// count == .count(2) — navigated into the inner dict
+
+let (_, role) = try outer.query(#"get "profile" | get "role""#)
+// role == .value("admin") — chained two levels deep
+```
+
+#### Custom Node Queries
+
+The query language works with any `Node`, not just `MerkleDictionary` or `MerkleArray`. Every `Node` automatically supports `get`, `count`, `keys`, `keys sorted`, `contains`, and `set` through the default `evaluate(_:)` implementation, which uses the three core `Node` methods (`properties()`, `get(property:)`, `set(properties:)`). Transforms (`insert`, `update`, `delete`) are compiled into `ArrayTrie<Transform>` steps and applied via `transform(transforms:)`.
+
+Pipeline chaining works automatically on any custom `Node`. The executor uses `get(property:)` directly for mid-pipeline navigation, so `get "key" | ...` chains into children without requiring any overrides:
+
+```swift
+struct GameState: Node {
+    var players: [String: HeaderImpl<PlayerStats>] = [:]
+
+    func get(property: PathSegment) -> (any Header)? { players[property] }
+    func properties() -> Set<PathSegment> { Set(players.keys) }
+    func set(properties: [PathSegment: any Header]) -> Self {
+        var copy = self
+        copy.players = properties.compactMapValues { $0 as? HeaderImpl<PlayerStats> }
+        return copy
+    }
+}
+
+var state = GameState(/* ... */)
+let (_, result) = try state.query("count")                  // .count(N)
+let (_, result) = try state.query(#"contains "alice""#)      // .bool(true)
+let (_, result) = try state.query(#"get "alice" | count"#)   // .count(N) on alice's PlayerStats
+let (_, result) = try state.query(#"get "alice" | keys"#)    // .list([...]) of PlayerStats keys
+```
+
+To customize terminal expression behavior, override `evaluate(_:)` and call `defaultEvaluate(_:)` for cases you don't handle:
+
+```swift
+extension GameState {
+    func evaluate(_ expression: CashewExpression) throws -> (Self, CashewResult) {
+        switch expression {
+        case .count:
+            return (self, .value("players: \(players.count)"))
+        default:
+            return try defaultEvaluate(expression)
+        }
+    }
+}
+```
+
+`defaultEvaluate(_:)` provides the full default implementation (`get`, `count`, `keys`, `keys sorted`, `contains`, `set`). Pipeline navigation works regardless of whether you override `evaluate` — the executor handles it at the plan execution level.
+
+Headers also delegate queries to their wrapped node, so `HeaderImpl<GameState>` automatically supports the same queries:
+
+```swift
+let header = HeaderImpl(node: state)
+let (_, result) = try header.query("count")  // delegates to state.query("count")
+
+// With a fetcher, the header resolves itself before executing
+let (_, result) = try await unresolvedHeader.query("count", fetcher: myFetcher)
 ```
 
 #### Execution Model

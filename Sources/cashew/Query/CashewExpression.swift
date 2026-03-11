@@ -16,12 +16,33 @@ public enum CashewExpression: Equatable, Sendable {
     case append(String)
 }
 
+public struct AnyQueryable: Sendable {
+    private let _execute: @Sendable (CashewPlan) throws -> CashewResult
+    private let _executeAsync: @Sendable (CashewPlan, Fetcher) async throws -> CashewResult
+    public let description: String
+
+    public init<T: CashewQueryable & Sendable>(_ value: T) {
+        _execute = { plan in try value.execute(plan: plan).1 }
+        _executeAsync = { plan, fetcher in try await value.execute(plan: plan, fetcher: fetcher).1 }
+        description = "\(value)"
+    }
+
+    public func execute(plan: CashewPlan) throws -> CashewResult {
+        try _execute(plan)
+    }
+
+    public func execute(plan: CashewPlan, fetcher: Fetcher) async throws -> CashewResult {
+        try await _executeAsync(plan, fetcher)
+    }
+}
+
 public enum CashewResult: Sendable, CustomStringConvertible {
     case value(String?)
     case bool(Bool)
     case count(Int)
     case list([String])
     case entries([(key: String, value: String)])
+    case node(AnyQueryable)
     case ok
 
     public var description: String {
@@ -31,6 +52,7 @@ public enum CashewResult: Sendable, CustomStringConvertible {
         case .count(let n): return "\(n)"
         case .list(let items): return items.joined(separator: "\n")
         case .entries(let pairs): return pairs.map { "\($0.key): \($0.value)" }.joined(separator: "\n")
+        case .node(let q): return q.description
         case .ok: return "ok"
         }
     }
@@ -47,6 +69,7 @@ extension CashewResult: Equatable {
             guard a.count == b.count else { return false }
             return zip(a, b).allSatisfy { $0.key == $1.key && $0.value == $1.value }
         case (.ok, .ok): return true
+        case (.node, .node): return false
         default: return false
         }
     }

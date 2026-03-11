@@ -8,6 +8,10 @@ public enum CashewStep {
 public struct CashewPlan {
     public let steps: [CashewStep]
 
+    public init(steps: [CashewStep]) {
+        self.steps = steps
+    }
+
     public static func compile(_ expressions: [CashewExpression]) -> CashewPlan {
         var steps = [CashewStep]()
         var transforms = ArrayTrie<Transform>()

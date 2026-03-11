@@ -1189,18 +1189,37 @@ struct QueryAllTypesTests {
             #expect(outer.count == 2)
         }
 
-        @Test("Dict of dicts: get returns inner header CID string")
+        @Test("Dict of dicts: get returns queryable child")
         func testDictOfDictsGet() throws {
             let inner = try InnerDict().inserting(key: "role", value: "admin")
             let h = HeaderImpl(node: inner)
             let outer = try DictOfDicts().inserting(key: "profile", value: h)
 
             let (_, result) = try outer.query(#"get "profile""#)
-            if case .value(let cid) = result {
-                #expect(cid == h.rawCID)
-            } else {
-                Issue.record("Expected .value with CID")
+            guard case .node(let child) = result else {
+                Issue.record("Expected .node with queryable child")
+                return
             }
+            let innerResult = try child.execute(plan: CashewPlan.compile([.get("role")]))
+            #expect(innerResult == .value("admin"))
+        }
+
+        @Test("Dict of dicts: pipeline navigates into child")
+        func testDictOfDictsPipeline() throws {
+            let inner = try InnerDict()
+                .inserting(key: "role", value: "admin")
+                .inserting(key: "dept", value: "eng")
+            let outer = try DictOfDicts()
+                .inserting(key: "profile", value: HeaderImpl(node: inner))
+
+            let (_, countResult) = try outer.query(#"get "profile" | count"#)
+            #expect(countResult == .count(2))
+
+            let (_, keysResult) = try outer.query(#"get "profile" | keys sorted"#)
+            #expect(keysResult == .list(["dept", "role"]))
+
+            let (_, getResult) = try outer.query(#"get "profile" | get "role""#)
+            #expect(getResult == .value("admin"))
         }
 
         @Test("Dict of dicts: delete inner entry")
@@ -1436,6 +1455,119 @@ struct QueryAllTypesTests {
             let bResolved = try await bHeader.resolve(fetcher: store)
             let (_, yVal) = try await bResolved.query(#"get "y""#, fetcher: store)
             #expect(yVal == .value("2"))
+        }
+    }
+
+    @Suite("Custom Node Queries")
+    struct CustomNodeTests {
+
+        struct ScoreBoard: Node, Sendable {
+            var players: [String: HeaderImpl<MerkleDictionaryImpl<String>>] = [:]
+
+            func properties() -> Set<String> { Set(players.keys) }
+            func get(property: String) -> (any Header)? { players[property] }
+            func set(properties: [String: any Header]) -> ScoreBoard {
+                var copy = self
+                for (k, v) in properties {
+                    copy.players[k] = v as? HeaderImpl<MerkleDictionaryImpl<String>>
+                }
+                return copy
+            }
+
+            func toData() -> Data? { nil }
+            init?(data: Data) { return nil }
+            init() {}
+            init(players: [String: HeaderImpl<MerkleDictionaryImpl<String>>]) { self.players = players }
+        }
+
+        struct CustomEvalBoard: Node, Sendable {
+            var players: [String: HeaderImpl<MerkleDictionaryImpl<String>>] = [:]
+
+            func properties() -> Set<String> { Set(players.keys) }
+            func get(property: String) -> (any Header)? { players[property] }
+            func set(properties: [String: any Header]) -> CustomEvalBoard {
+                var copy = self
+                for (k, v) in properties {
+                    copy.players[k] = v as? HeaderImpl<MerkleDictionaryImpl<String>>
+                }
+                return copy
+            }
+
+            func evaluate(_ expression: CashewExpression) throws -> (CustomEvalBoard, CashewResult) {
+                switch expression {
+                case .count:
+                    return (self, .value("players: \(players.count)"))
+                default:
+                    return try defaultEvaluate(expression)
+                }
+            }
+
+            func toData() -> Data? { nil }
+            init?(data: Data) { return nil }
+            init() {}
+            init(players: [String: HeaderImpl<MerkleDictionaryImpl<String>>]) { self.players = players }
+        }
+
+        static func makeBoard() throws -> [String: HeaderImpl<MerkleDictionaryImpl<String>>] {
+            let inner = try MerkleDictionaryImpl<String>()
+                .inserting(key: "score", value: "100")
+                .inserting(key: "role", value: "tank")
+            return ["alice": HeaderImpl(node: inner)]
+        }
+
+        @Test("Pipeline navigates into children automatically")
+        func testAutomaticPipeline() throws {
+            let board = ScoreBoard(players: try Self.makeBoard())
+
+            let (_, result) = try board.query(#"get "alice" | get "score""#)
+            #expect(result == .value("100"))
+
+            let (_, keys) = try board.query(#"get "alice" | keys sorted"#)
+            #expect(keys == .list(["role", "score"]))
+
+            let (_, count) = try board.query(#"get "alice" | count"#)
+            #expect(count == .count(2))
+        }
+
+        @Test("Pipeline works even when evaluate is overridden without defaultEvaluate for get")
+        func testPipelineBypassesEvaluate() throws {
+            let board = CustomEvalBoard(players: try Self.makeBoard())
+
+            let (_, result) = try board.query(#"get "alice" | get "score""#)
+            #expect(result == .value("100"))
+
+            let (_, keys) = try board.query(#"get "alice" | keys sorted"#)
+            #expect(keys == .list(["role", "score"]))
+        }
+
+        @Test("Custom evaluate overrides count but defaultEvaluate handles rest")
+        func testCustomCountFallsThrough() throws {
+            let board = CustomEvalBoard(players: try Self.makeBoard())
+
+            let (_, count) = try board.query("count")
+            #expect(count == .value("players: 1"))
+
+            let (_, keys) = try board.query("keys")
+            #expect(keys == .list(["alice"]))
+        }
+
+        @Test("Contains works on custom node")
+        func testContains() throws {
+            let board = ScoreBoard(players: try Self.makeBoard())
+
+            let (_, yes) = try board.query(#"contains "alice""#)
+            #expect(yes == .bool(true))
+            let (_, no) = try board.query(#"contains "bob""#)
+            #expect(no == .bool(false))
+        }
+
+        @Test("Terminal get returns .node on custom node")
+        func testTerminalGet() throws {
+            let board = ScoreBoard(players: try Self.makeBoard())
+            let (_, result) = try board.query(#"get "alice""#)
+            if case .node = result {} else {
+                Issue.record("Expected .node, got \(result)")
+            }
         }
     }
 }

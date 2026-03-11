@@ -22,7 +22,7 @@ import Crypto
 /// }
 /// ```
 /// For most use cases, ``HeaderImpl`` is the ready-made concrete implementation.
-public protocol Header: Codable, Sendable, LosslessStringConvertible {
+public protocol Header: CashewQueryable, Codable, Sendable, LosslessStringConvertible {
     associatedtype NodeType: Node
 
     /// The content identifier for this node's serialized data.

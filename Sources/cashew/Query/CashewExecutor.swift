@@ -1,8 +1,17 @@
 import ArrayTrie
 
+func wrapQueryable(_ header: any Header) -> AnyQueryable {
+    func open<H: Header>(_ h: H) -> AnyQueryable { AnyQueryable(h) }
+    return open(header)
+}
+
 public extension Node {
-    func evaluate(_ expression: CashewExpression) throws -> (Self, CashewResult) {
+    func defaultEvaluate(_ expression: CashewExpression) throws -> (Self, CashewResult) {
         switch expression {
+        case .get(let key):
+            guard let header = get(property: key) else { return (self, .value(nil)) }
+            return (self, .node(wrapQueryable(header)))
+
         case .count:
             return (self, .count(properties().count))
 
@@ -36,11 +45,15 @@ public extension Node {
         }
     }
 
+    func evaluate(_ expression: CashewExpression) throws -> (Self, CashewResult) {
+        try defaultEvaluate(expression)
+    }
+
     func execute(plan: CashewPlan) throws -> (Self, CashewResult) {
         var current = self
         var lastResult: CashewResult = .ok
 
-        for step in plan.steps {
+        for (index, step) in plan.steps.enumerated() {
             switch step {
             case .transform(let trie):
                 guard let transformed = try current.transform(transforms: trie) else {
@@ -50,9 +63,25 @@ public extension Node {
                 lastResult = .ok
 
             case .evaluate(let expr):
+                let hasRemaining = index < plan.steps.count - 1
+
+                if case .get(let key) = expr, hasRemaining, let header = current.get(property: key) {
+                    let remaining = CashewPlan(steps: Array(plan.steps[(index + 1)...]))
+                    lastResult = try wrapQueryable(header).execute(plan: remaining)
+                    return (current, lastResult)
+                }
+
                 let (next, result) = try current.evaluate(expr)
                 current = next
                 lastResult = result
+
+                if case .node(let child) = result {
+                    let remaining = CashewPlan(steps: Array(plan.steps[(index + 1)...]))
+                    if !remaining.steps.isEmpty {
+                        lastResult = try child.execute(plan: remaining)
+                    }
+                    return (current, lastResult)
+                }
             }
         }
 
@@ -95,6 +124,9 @@ func evaluateExpression<D: MerkleDictionary>(
     switch expression {
     case .get(let key):
         let value = try dict.get(key: key)
+        if let header = value as? any Header {
+            return (dict, .node(wrapQueryable(header)))
+        }
         return (dict, .value(value.map { "\($0)" }))
 
     case .keys:
@@ -146,7 +178,7 @@ public extension MerkleDictionary where ValueType: LosslessStringConvertible {
         var current = self
         var lastResult: CashewResult = .ok
 
-        for step in plan.steps {
+        for (index, step) in plan.steps.enumerated() {
             switch step {
             case .transform(let trie):
                 if let transformed = try current.transform(transforms: trie) {
@@ -160,6 +192,14 @@ public extension MerkleDictionary where ValueType: LosslessStringConvertible {
                 let (next, result) = try current.evaluate(expr)
                 current = next
                 lastResult = result
+
+                if case .node(let child) = result {
+                    let remaining = CashewPlan(steps: Array(plan.steps[(index + 1)...]))
+                    if !remaining.steps.isEmpty {
+                        lastResult = try child.execute(plan: remaining)
+                    }
+                    return (current, lastResult)
+                }
             }
         }
 
@@ -222,6 +262,10 @@ public extension Header {
         guard let loadedNode = loaded.node else { throw DataErrors.nodeNotAvailable }
         let (updatedNode, result) = try await body(loadedNode)
         return (Self(node: updatedNode), result)
+    }
+
+    func evaluate(_ expression: CashewExpression) throws -> (Self, CashewResult) {
+        try withNode { try $0.evaluate(expression) }
     }
 
     func query(_ input: String) throws -> (Self, CashewResult) {
