@@ -1878,7 +1878,7 @@ struct OrgUnit: Node {
         self.history = history
     }
 
-    func get(property: PathSegment) -> (any Address)? {
+    func get(property: PathSegment) -> (any Header)? {
         switch property {
         case "team": return team
         case "history": return history
@@ -1890,7 +1890,7 @@ struct OrgUnit: Node {
         return ["team", "history"]
     }
 
-    func set(properties: [PathSegment: any Address]) -> Self {
+    func set(properties: [PathSegment: any Header]) -> Self {
         return OrgUnit(
             team: (properties["team"] as? HeaderImpl<Department>) ?? team,
             history: (properties["history"] as? HeaderImpl<AuditLog>) ?? history

@@ -24,7 +24,6 @@ let package = Package(
         .package(url: "https://github.com/swift-libp2p/swift-cid.git", from: "0.0.1"),
         .package(url: "https://github.com/swift-libp2p/swift-multicodec.git", from: "0.0.1"),
         .package(url: "https://github.com/swift-libp2p/swift-multihash.git", from: "0.0.1"),
-        .package(url: "https://github.com/JohnSundell/CollectionConcurrencyKit.git", from: "0.2.0"),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -35,7 +34,6 @@ let package = Package(
                 .product(name: "Collections", package: "swift-collections"),
                 .product(name: "ArrayTrie", package: "ArrayTrie"),
                 .product(name: "Crypto", package: "swift-crypto"),
-                .product(name: "CollectionConcurrencyKit", package: "CollectionConcurrencyKit"),
                 .product(name: "CID", package: "swift-cid"),
                 .product(name: "Multicodec", package: "swift-multicodec"),
                 .product(name: "Multihash", package: "swift-multihash")],

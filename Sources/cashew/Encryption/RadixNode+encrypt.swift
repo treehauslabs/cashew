@@ -39,7 +39,7 @@ public extension RadixNode {
 
         switch strategy {
         case .recursive:
-            if let value = value as? Address {
+            if let value = value as? any Header {
                 let valueOverrides = overrides?.traverse([""])
                 if let valueOverrides, !valueOverrides.isEmpty {
                     guard let encrypted = try value.encrypt(encryption: valueOverrides).encryptSelf(key: key) as? ValueType else {
@@ -53,7 +53,7 @@ public extension RadixNode {
                 return Self(prefix: prefix, value: encrypted, children: newChildren)
             }
         case .targeted:
-            if overrides?.get([""]) != nil, let value = value as? Address {
+            if overrides?.get([""]) != nil, let value = value as? any Header {
                 guard let encrypted = try value.encryptSelf(key: key) as? ValueType else {
                     throw DataErrors.encryptionFailed
                 }

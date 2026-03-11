@@ -4,6 +4,7 @@ import Multihash
 import CID
 import Crypto
 
+/// Default concrete implementation of ``RadixHeader``.
 public struct RadixHeaderImpl<Value>: RadixHeader where Value: Codable, Value: Sendable, Value: LosslessStringConvertible {
     public typealias NodeType = RadixNodeImpl<Value>
 
@@ -19,30 +20,6 @@ public struct RadixHeaderImpl<Value>: RadixHeader where Value: Codable, Value: S
         self.rawCID = rawCID
         self.rawNode = node.map { Box($0) }
         self.encryptionInfo = encryptionInfo
-    }
-
-    public init(rawCID: String, node: NodeType?) {
-        self.rawCID = rawCID
-        self.rawNode = node.map { Box($0) }
-        self.encryptionInfo = nil
-    }
-
-    public init(rawCID: String) {
-        self.rawCID = rawCID
-        self.rawNode = nil
-        self.encryptionInfo = nil
-    }
-
-    public init(node: NodeType) {
-        self.rawNode = Box(node)
-        self.rawCID = Self.createSyncCID(for: node, codec: Self.defaultCodec)
-        self.encryptionInfo = nil
-    }
-
-    public init(node: NodeType, codec: Codecs) {
-        self.rawNode = Box(node)
-        self.rawCID = Self.createSyncCID(for: node, codec: codec)
-        self.encryptionInfo = nil
     }
 
     public init(node: NodeType, key: SymmetricKey) throws {

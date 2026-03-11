@@ -9,8 +9,7 @@ import Multihash
 
 // MARK: - Test-specific helper types
 
-struct SimpleNode: Node, Sendable {
-
+struct SimpleNode: Node {
     let id: String
     let isLeaf: Bool
 
@@ -19,9 +18,9 @@ struct SimpleNode: Node, Sendable {
         self.isLeaf = isLeaf
     }
 
-    func get(property: PathSegment) -> Address? {
+    func get(property: PathSegment) -> (any Header)? {
         if isLeaf { return nil }
-        return SimpleHeader(rawCID: "\(id)-\(property)")
+        return HeaderImpl<SimpleNode>(rawCID: "\(id)-\(property)")
     }
 
     func properties() -> Set<PathSegment> {
@@ -29,147 +28,42 @@ struct SimpleNode: Node, Sendable {
         return ["child1", "child2"]
     }
 
-    func set(property: PathSegment, to child: Address) -> Self {
+    func set(properties: [PathSegment: any Header]) -> Self {
         return self
-    }
-
-    func set(properties: [PathSegment: Address]) -> Self {
-        return self
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(isLeaf, forKey: .isLeaf)
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case id, isLeaf
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(String.self, forKey: .id)
-        isLeaf = try container.decodeIfPresent(Bool.self, forKey: .isLeaf) ?? false
-    }
-
-    var description: String {
-        if isLeaf {
-            return "SimpleNode(\(id),leaf)"
-        }
-        return "SimpleNode(\(id))"
-    }
-
-    init?(_ description: String) {
-        if description.hasPrefix("SimpleNode(") && description.hasSuffix(")") {
-            let content = String(description.dropFirst(11).dropLast(1))
-            let parts = content.split(separator: ",")
-            if parts.count >= 1 {
-                let id = String(parts[0])
-                let isLeaf = parts.count > 1 && parts[1] == "leaf"
-                self.init(id: id, isLeaf: isLeaf)
-            } else {
-                return nil
-            }
-        } else {
-            return nil
-        }
-    }
-}
-
-struct SimpleHeader: Header {
-    let rawCID: String
-    let node: SimpleNode?
-
-    init(rawCID: String, node: SimpleNode?, encryptionInfo: EncryptionInfo?) {
-        self.rawCID = rawCID
-        self.node = node
-    }
-
-    init(node: SimpleNode, key: SymmetricKey) throws {
-        self.rawCID = Self.createSyncCID(for: node, codec: Self.defaultCodec)
-        self.node = node
     }
 }
 
 final class SimpleFetcher: Fetcher, Sendable {
-    private let responses: [String: String]
+    private let responses: [String: Data]
 
-    init(responses: [String: String] = [:]) {
-        self.responses = responses
+    init(responses: [String: SimpleNode] = [:]) {
+        var data: [String: Data] = [:]
+        for (key, node) in responses {
+            if let d = node.toData() { data[key] = d }
+        }
+        self.responses = data
     }
 
     func fetch(rawCid: String) async throws -> Data {
-        let nodeDescription = responses[rawCid] ?? "SimpleNode(fetched-\(rawCid),leaf)"
-        if let node = SimpleNode(nodeDescription) {
-            return node.toData() ?? Data()
-        }
+        if let data = responses[rawCid] { return data }
         let leafNode = SimpleNode(id: "fetched-\(rawCid)", isLeaf: true)
         return leafNode.toData() ?? Data()
     }
 }
 
-struct UserScalar: Scalar, Sendable {
+struct UserScalar: Scalar {
     let id: String
     let name: String
     let email: String
-
-    init(id: String, name: String, email: String) {
-        self.id = id
-        self.name = name
-        self.email = email
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case id, name, email
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(name, forKey: .name)
-        try container.encode(email, forKey: .email)
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(String.self, forKey: .id)
-        name = try container.decode(String.self, forKey: .name)
-        email = try container.decode(String.self, forKey: .email)
-    }
 }
 
-struct DocumentScalar: Scalar, Sendable {
+struct DocumentScalar: Scalar {
     let id: String
     let title: String
     let content: String
-
-    init(id: String, title: String, content: String) {
-        self.id = id
-        self.title = title
-        self.content = content
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case id, title, content
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(title, forKey: .title)
-        try container.encode(content, forKey: .content)
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(String.self, forKey: .id)
-        title = try container.decode(String.self, forKey: .title)
-        content = try container.decode(String.self, forKey: .content)
-    }
 }
 
-struct DictionaryNode: Node, Sendable {
+struct DictionaryNode: Node {
     let id: String
     let entries: [String: String]
 
@@ -178,7 +72,7 @@ struct DictionaryNode: Node, Sendable {
         self.entries = entries
     }
 
-    func get(property: PathSegment) -> Address? {
+    func get(property: PathSegment) -> (any Header)? {
         if let cid = entries[property] {
             return HeaderImpl<DictionaryNode>(rawCID: cid)
         }
@@ -189,45 +83,19 @@ struct DictionaryNode: Node, Sendable {
         return Set(entries.keys)
     }
 
-    func set(property: PathSegment, to child: Address) -> Self {
+    func set(properties: [PathSegment: any Header]) -> Self {
         var newEntries = entries
-        if let header = child as? HeaderImpl<DictionaryNode> {
-            newEntries[property] = header.rawCID
+        for (property, address) in properties {
+            if let header = address as? HeaderImpl<DictionaryNode> {
+                newEntries[property] = header.rawCID
+            }
         }
         return DictionaryNode(id: id, entries: newEntries)
-    }
-
-    func set(properties: [PathSegment: Address]) -> Self {
-        var result = self
-        for (property, address) in properties {
-            result = result.set(property: property, to: address)
-        }
-        return result
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case id, entries
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(entries, forKey: .entries)
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(String.self, forKey: .id)
-        entries = try container.decode([String: String].self, forKey: .entries)
     }
 }
 
 struct TestBaseStructure: Scalar {
     let val: Int
-
-    init(val: Int) {
-        self.val = val
-    }
 }
 
 // MARK: - Basic Resolution
@@ -240,7 +108,7 @@ struct BasicResolutionTests {
         let cid = "test-cid-123"
         let header = HeaderImpl<SimpleNode>(rawCID: cid)
 
-        let fetcher = SimpleFetcher(responses: [cid: "SimpleNode(fetched-node,leaf)"])
+        let fetcher = SimpleFetcher(responses: [cid: SimpleNode(id: "fetched-node", isLeaf: true)])
 
         let resolvedHeader = try await header.resolve(fetcher: fetcher)
 
@@ -253,7 +121,7 @@ struct BasicResolutionTests {
         let cid = "recursive-cid-456"
         let header = HeaderImpl<SimpleNode>(rawCID: cid)
 
-        let fetcher = SimpleFetcher(responses: [cid: "SimpleNode(recursive-node,leaf)"])
+        let fetcher = SimpleFetcher(responses: [cid: SimpleNode(id: "recursive-node", isLeaf: true)])
 
         let resolvedHeader = try await header.resolveRecursive(fetcher: fetcher)
 
@@ -284,7 +152,7 @@ struct BasicResolutionTests {
         print(originalHeader)
         print(originalNode)
 
-        let fetcher = SimpleFetcher(responses: [originalCID: originalNode.description])
+        let fetcher = SimpleFetcher(responses: [originalCID: originalNode])
 
         let cidOnlyHeader = HeaderImpl<SimpleNode>(rawCID: originalCID)
         let resolvedHeader = try await cidOnlyHeader.resolve(fetcher: fetcher)
@@ -305,7 +173,7 @@ struct BasicResolutionTests {
         let header = try await HeaderImpl.create(node: node)
         let cid = header.rawCID
 
-        let fetcher = SimpleFetcher(responses: [cid: node.description])
+        let fetcher = SimpleFetcher(responses: [cid: node])
 
         let cidHeader1 = HeaderImpl<SimpleNode>(rawCID: cid)
         let cidHeader2 = HeaderImpl<SimpleNode>(rawCID: cid)
@@ -326,7 +194,7 @@ struct BasicResolutionTests {
     func testNodeResolve() async throws {
         let node = SimpleNode(id: "node-resolve-test")
         let fetcher = SimpleFetcher(responses: [
-            "node-resolve-test-child1": "SimpleNode(leaf1,leaf)"
+            "node-resolve-test-child1": SimpleNode(id: "leaf1", isLeaf: true)
         ])
 
         var paths = ArrayTrie<ResolutionStrategy>()
@@ -343,8 +211,8 @@ struct BasicResolutionTests {
     func testNodeResolveRecursive() async throws {
         let node = SimpleNode(id: "recursive-node-test")
         let fetcher = SimpleFetcher(responses: [
-            "recursive-node-test-child1": "SimpleNode(leaf1,leaf)",
-            "recursive-node-test-child2": "SimpleNode(leaf2,leaf)"
+            "recursive-node-test-child1": SimpleNode(id: "leaf1", isLeaf: true),
+            "recursive-node-test-child2": SimpleNode(id: "leaf2", isLeaf: true)
         ])
 
         let resolvedNode = try await node.resolveRecursive(fetcher: fetcher)

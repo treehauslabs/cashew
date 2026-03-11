@@ -13,32 +13,12 @@ struct NestedDictionaryOperationsTests {
 
     @Test("True nested MerkleDictionary transforms - simple two-level")
     func testTrueNestedMerkleDictionaryTransforms() throws {
+        struct TestBaseStructure: Scalar {
+            let val: Int
+        }
+
         typealias BaseDictionaryType = MerkleDictionaryImpl<HeaderImpl<TestBaseStructure>>
         typealias NestedDictionaryType = MerkleDictionaryImpl<HeaderImpl<BaseDictionaryType>>
-
-        struct TestBaseStructure: Node {
-            let val: Int
-
-            init(val: Int) {
-                self.val = val
-            }
-
-            func get(property: PathSegment) -> (any cashew.Address)? {
-                return nil
-            }
-
-            func properties() -> Set<PathSegment> {
-                return Set()
-            }
-
-            func set(property: PathSegment, to child: any cashew.Address) -> TestBaseStructure {
-                return self
-            }
-
-            func set(properties: [PathSegment : any cashew.Address]) -> TestBaseStructure {
-                return self
-            }
-        }
 
         let userAlice = TestBaseStructure(val: 100)
         let userBob = TestBaseStructure(val: 200)
@@ -145,10 +125,6 @@ struct NestedDictionaryOperationsTests {
 
         struct TestBaseStructure: Scalar {
             let val: Int
-
-            init(val: Int) {
-                self.val = val
-            }
         }
 
         let profileName = TestBaseStructure(val: 1)

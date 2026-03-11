@@ -608,8 +608,7 @@ Build a transaction ledger and generate existence/insertion/deletion proofs. Pro
 | Protocol | Conforms To | Purpose |
 |----------|-------------|---------|
 | `Node` | `Codable`, `LosslessStringConvertible`, `Sendable` | Base for all Merkle structures. Defines `get`, `set`, `resolve`, `transform`, `proof`, `storeRecursively`. |
-| `Address` | `Sendable` | Reference to content. Supports `resolve`, `proof`, `transform`, `storeRecursively`, `removingNode`. |
-| `Header` | `Codable`, `Address`, `LosslessStringConvertible` | Wraps a `Node` with its CID and optional `EncryptionInfo`. Can be resolved or unresolved. |
+| `Header` | `Codable`, `Sendable`, `LosslessStringConvertible` | Wraps a `Node` with its CID and optional `EncryptionInfo`. Supports resolve, proof, transform, store, encrypt. Can be resolved or unresolved. |
 | `RadixNode` | `Node` | Compressed trie node with `prefix`, optional `value`, and `children`. |
 | `RadixHeader` | `Header` | Header constrained to `RadixNode`. |
 | `MerkleDictionary` | `Node` | Top-level key-value map. Dispatches by first character to `RadixHeader` children. Supports cursor-based sorted iteration. |
@@ -625,7 +624,7 @@ Build a transaction ledger and generate existence/insertion/deletion proofs. Pro
 
 | Enum | Cases | Purpose |
 |------|-------|---------|
-| `ResolutionStrategy` | `.targeted`, `.recursive`, `.list` | Controls how deep resolution goes |
+| `ResolutionStrategy` | `.targeted`, `.recursive`, `.list`, `.range(after:limit:)` | Controls how deep resolution goes |
 | `Transform` | `.insert(String)`, `.update(String)`, `.delete` | Mutation operations for transforms |
 | `SparseMerkleProof` | `.insertion`, `.mutation`, `.deletion`, `.existence` | Proof types for sparse Merkle proofs |
 | `EncryptionStrategy` | `.targeted(key)`, `.list(key)`, `.recursive(key)` | Controls what gets encrypted at each path |
@@ -635,9 +634,9 @@ Build a transaction ledger and generate existence/insertion/deletion proofs. Pro
 | Error | Cases |
 |-------|-------|
 | `DataErrors` | `.nodeNotAvailable`, `.serializationFailed`, `.cidCreationFailed`, `.encryptionFailed`, `.keyNotFound`, `.invalidIV` |
-| `TransformErrors` | `.transformFailed`, `.invalidKey`, `.missingData` |
-| `ProofErrors` | `.invalidProofType`, `.proofFailed` |
-| `ResolutionErrors` | `.typeError` |
+| `TransformErrors` | `.transformFailed(String)`, `.invalidKey(String)`, `.missingData(String)` |
+| `ProofErrors` | `.invalidProofType(String)`, `.proofFailed(String)` |
+| `ResolutionErrors` | `.typeError(String)` |
 | `CashewDecodingError` | `.decodeFromDataError` |
 
 ### Concrete Types
@@ -650,7 +649,6 @@ Build a transaction ledger and generate existence/insertion/deletion proofs. Pro
 | `RadixNodeImpl<V>` | Concrete `RadixNode` with JSON coding for `Character`-keyed children. |
 | `HeaderImpl<N>` | Generic `Header` wrapping any `Node` type. |
 | `RadixHeaderImpl<V>` | `RadixHeader` for `RadixNodeImpl<V>`. |
-| `ThreadSafeDictionary<K,V>` | Actor-based thread-safe dictionary for concurrent resolution. |
 | `EncryptionInfo` | Metadata on an encrypted header (`keyHash` + `iv`). |
 
 ## Architecture
@@ -690,9 +688,8 @@ Node (base: Codable + LosslessStringConvertible + Sendable)
   |-- MerkleArray (ordered collection, backed by MerkleDictionary)
   |-- MerkleSet (membership set, backed by MerkleDictionary)
 
-Address (Sendable, supports resolve/proof/transform/store/encrypt)
-  |-- Header (Codable, wraps a Node with its CID + optional EncryptionInfo)
-      |-- RadixHeader (Header constrained to RadixNode)
+Header (Codable + Sendable, wraps a Node with its CID + optional EncryptionInfo)
+  |-- RadixHeader (Header constrained to RadixNode)
 ```
 
 Concrete implementations: `MerkleDictionaryImpl<V>`, `MerkleArrayImpl<V>`, `MerkleSetImpl`, `RadixNodeImpl<V>`, `HeaderImpl<N>`, `RadixHeaderImpl<V>`.
@@ -716,7 +713,7 @@ Path compression stores "alice" as a single node rather than 5 chained nodes —
 
 ```
 Sources/cashew/
-  Core/           -- Node, Address, Header protocols + CID creation + encryption helpers
+  Core/           -- Node, Header protocols + CID creation + encryption helpers
   MerkleDataStructures/ -- MerkleDictionary, RadixNode, RadixHeader protocols + concrete impls
   Fetcher/        -- Fetcher, Storer, KeyProvider protocols + store extensions
   Resolver/       -- Resolution strategies + resolve extensions per type
@@ -735,7 +732,6 @@ Sources/cashew/
 | [swift-multicodec](https://github.com/swift-libp2p/swift-multicodec) | Codec identifiers (dag-json, dag-cbor, etc.) |
 | [swift-multihash](https://github.com/swift-libp2p/swift-multihash) | Self-describing hash format |
 | [swift-collections](https://github.com/apple/swift-collections) | Swift standard collections |
-| [CollectionConcurrencyKit](https://github.com/JohnSundell/CollectionConcurrencyKit) | `concurrentForEach` for parallel async operations |
 
 ## Running Tests
 

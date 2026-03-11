@@ -33,8 +33,8 @@ struct ProofTests {
 
         @Test("ProofErrors enum has correct cases")
         func testProofErrorsCases() {
-            let invalidType = ProofErrors.invalidProofType
-            let proofFailed = ProofErrors.proofFailed
+            let invalidType = ProofErrors.invalidProofType("test")
+            let proofFailed = ProofErrors.proofFailed("test")
 
             #expect(invalidType as Error is ProofErrors)
             #expect(proofFailed as Error is ProofErrors)

@@ -2,22 +2,22 @@ import ArrayTrie
 
 public extension MerkleArray {
     func mutating(at index: Int, value: ValueType) throws -> Self {
-        guard index >= 0 && index < count else { throw TransformErrors.invalidKey }
+        guard index >= 0 && index < count else { throw TransformErrors.invalidKey("index \(index) out of bounds [0, \(count))") }
         return try mutating(key: Self.binaryKey(index), value: value)
     }
 
     func deleting(at index: Int) throws -> Self {
-        guard index >= 0 && index < count else { throw TransformErrors.invalidKey }
+        guard index >= 0 && index < count else { throw TransformErrors.invalidKey("index \(index) out of bounds [0, \(count))") }
         let key = Self.binaryKey(index)
         let lastKey = Self.binaryKey(count - 1)
         if index == count - 1 {
             return try deleting(key: key)
         }
-        guard let lastElement = try get(key: lastKey) else { throw TransformErrors.missingData }
+        guard let lastElement = try get(key: lastKey) else { throw TransformErrors.missingData("last element not found at index \(count - 1)") }
         var transforms = ArrayTrie<Transform>()
         transforms.set([key], value: .update(String(describing: lastElement)))
         transforms.set([lastKey], value: .delete)
-        guard let result = try transform(transforms: transforms) else { throw TransformErrors.transformFailed }
+        guard let result = try transform(transforms: transforms) else { throw TransformErrors.transformFailed("delete-and-swap transform failed at index \(index)") }
         return result
     }
 

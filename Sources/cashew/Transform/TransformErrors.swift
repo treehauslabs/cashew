@@ -1,7 +1,6 @@
+/// Errors from applying ``Transform`` operations to a Merkle data structure.
 public enum TransformErrors: Error {
-    case transformFailed
-    case invalidKey
-    case missingData
+    case transformFailed(String)
+    case invalidKey(String)
+    case missingData(String)
 }
-
-

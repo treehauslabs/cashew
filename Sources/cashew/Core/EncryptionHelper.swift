@@ -1,6 +1,7 @@
 import Foundation
 import Crypto
 
+/// AES-256-GCM encryption and decryption utilities for node data.
 public enum EncryptionHelper {
     public static func encrypt(data: Data, key: SymmetricKey) throws -> (encrypted: Data, iv: Data) {
         let nonce = AES.GCM.Nonce()

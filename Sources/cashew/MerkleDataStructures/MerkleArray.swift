@@ -1,5 +1,10 @@
 import ArrayTrie
 
+/// An append-only ordered collection backed by a ``MerkleDictionary``.
+///
+/// Elements are stored under 256-bit binary keys derived from their integer index,
+/// which preserves lexicographic ordering in the underlying radix trie and enables
+/// efficient range queries.
 public protocol MerkleArray: MerkleDictionary {}
 
 public extension MerkleArray {

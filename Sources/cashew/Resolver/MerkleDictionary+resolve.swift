@@ -18,67 +18,47 @@ public extension MerkleDictionary {
         if paths.get([""]) == .recursive {
             return try await resolveRecursive(fetcher: fetcher)
         }
-        let newProperties = ThreadSafeDictionary<Character, ChildType>()
         if case .range(let after, _) = paths.get([""]) {
             let afterFirstChar = after?.first
-            try await properties().concurrentForEach { property in
-                let char = property.first!
+            let newProperties = try await resolveChildrenConcurrently { char in
                 if let afterChar = afterFirstChar, char < afterChar {
-                    await newProperties.set(char, value: children[char]!)
-                    return
+                    return children[char]!
                 }
                 if let childPath = paths.traverseChild(char) {
-                    await newProperties.set(char, value: try await children[char]!.resolveList(paths: childPath, fetcher: fetcher))
+                    return try await children[char]!.resolveList(paths: childPath, fetcher: fetcher)
                 } else {
-                    await newProperties.set(char, value: try await children[char]!.resolveList(paths: ArrayTrie(), fetcher: fetcher))
+                    return try await children[char]!.resolveList(paths: ArrayTrie(), fetcher: fetcher)
                 }
             }
-            return await Self(children: newProperties.allKeyValuePairs(), count: count)
+            return Self(children: newProperties, count: count)
         }
         if paths.get([""]) == .list {
-            try await properties().concurrentForEach { property in
-                if let childPath = paths.traverseChild(property.first!) {
-                    await newProperties.set(property.first!, value: try await children[property.first!]!.resolveList(paths: childPath, fetcher: fetcher))
-                }
-                else {
-                    await newProperties.set(property.first!, value: try await children[property.first!]!.resolveList(paths: ArrayTrie(), fetcher: fetcher))
+            let newProperties = try await resolveChildrenConcurrently { char in
+                if let childPath = paths.traverseChild(char) {
+                    return try await children[char]!.resolveList(paths: childPath, fetcher: fetcher)
+                } else {
+                    return try await children[char]!.resolveList(paths: ArrayTrie(), fetcher: fetcher)
                 }
             }
-            return await Self(children: newProperties.allKeyValuePairs(), count: count)
+            return Self(children: newProperties, count: count)
         }
         else {
-            try await properties().concurrentForEach { property in
-                if let childPath = paths.traverseChild(property.first!) {
-                    await newProperties.set(property.first!, value: try await children[property.first!]!.resolve(paths: childPath, fetcher: fetcher))
-                }
-                else {
-                    await newProperties.set(property.first!, value: children[property.first!]!)
+            let newProperties = try await resolveChildrenConcurrently { char in
+                if let childPath = paths.traverseChild(char) {
+                    return try await children[char]!.resolve(paths: childPath, fetcher: fetcher)
+                } else {
+                    return children[char]!
                 }
             }
+            return Self(children: newProperties, count: count)
         }
-        return await Self(children: newProperties.allKeyValuePairs(), count: count)
-    }
-
-    func resolveRecursive(fetcher: Fetcher) async throws -> Self {
-        let newProperties = ThreadSafeDictionary<PathSegment, Address>()
-
-        try await properties().concurrentForEach { property in
-            if let address = get(property: property) {
-                let resolvedAddress = try await address.resolveRecursive(fetcher: fetcher)
-                await newProperties.set(property, value: resolvedAddress)
-            }
-        }
-
-        return set(properties: await newProperties.allKeyValuePairs())
     }
 
     func resolveList(fetcher: Fetcher) async throws -> Self {
-        let newProperties = ThreadSafeDictionary<Character, ChildType>()
-
-        try await properties().concurrentForEach { property in
-            await newProperties.set(property.first!, value: try await children[property.first!]!.resolveList(paths: ArrayTrie(), fetcher: fetcher))
+        let newProperties = try await resolveChildrenConcurrently { char in
+            try await children[char]!.resolveList(paths: ArrayTrie(), fetcher: fetcher)
         }
-        return await Self(children: newProperties.allKeyValuePairs(), count: count)
+        return Self(children: newProperties, count: count)
     }
 
     static func rangePaths(after: String? = nil, limit: Int) -> ArrayTrie<ResolutionStrategy> {
@@ -89,5 +69,22 @@ public extension MerkleDictionary {
 
     func resolve(fetcher: Fetcher) async throws -> Self {
         return self
+    }
+
+    private func resolveChildrenConcurrently(_ resolve: @Sendable @escaping (Character) async throws -> ChildType) async throws -> [Character: ChildType] {
+        try await withThrowingTaskGroup(of: (Character, ChildType).self) { group in
+            for property in properties() {
+                let char = property.first!
+                group.addTask {
+                    let resolved = try await resolve(char)
+                    return (char, resolved)
+                }
+            }
+            var result = [Character: ChildType]()
+            for try await (key, value) in group {
+                result[key] = value
+            }
+            return result
+        }
     }
 }

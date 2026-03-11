@@ -1,3 +1,4 @@
+/// Default concrete implementation of ``MerkleArray``.
 public struct MerkleArrayImpl<Value>: MerkleArray where Value: Codable, Value: Sendable, Value: LosslessStringConvertible {
     public typealias ValueType = Value
     public typealias ChildType = RadixHeaderImpl<Value>

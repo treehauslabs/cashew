@@ -1,3 +1,7 @@
+/// A content-addressed set backed by a ``MerkleDictionary`` with empty string values.
+///
+/// Provides standard set algebra operations (union, intersection, subtraction,
+/// symmetric difference) where each member is a string key.
 public protocol MerkleSet: MerkleDictionary where ValueType == String {}
 
 public extension MerkleSet {

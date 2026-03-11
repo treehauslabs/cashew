@@ -5,11 +5,33 @@ import Multicodec
 import Multihash
 import Crypto
 
-public protocol Header: Codable, Address, LosslessStringConvertible {
+/// A content-addressed reference to a ``Node``.
+///
+/// A Header pairs a CID (content identifier) with an optionally-loaded node.
+/// When `node` is nil the Header is a lazy reference that can be resolved via a
+/// ``Fetcher``. When `node` is present the full data is available in memory.
+///
+/// **Minimal conformance** requires only the designated initializer and the
+/// encrypted initializer — all other inits have default implementations:
+/// ```swift
+/// struct MyHeader: Header {
+///     let rawCID: String
+///     let node: MyNode?
+///     init(rawCID: String, node: MyNode?, encryptionInfo: EncryptionInfo?) { ... }
+///     init(node: MyNode, key: SymmetricKey) throws { ... }
+/// }
+/// ```
+/// For most use cases, ``HeaderImpl`` is the ready-made concrete implementation.
+public protocol Header: Codable, Sendable, LosslessStringConvertible {
     associatedtype NodeType: Node
 
+    /// The content identifier for this node's serialized data.
     var rawCID: String { get }
+
+    /// The deserialized node, or nil if not yet fetched.
     var node: NodeType? { get }
+
+    /// Encryption metadata, or nil if the node is stored in plaintext.
     var encryptionInfo: EncryptionInfo? { get }
 
     init(rawCID: String)
@@ -17,8 +39,21 @@ public protocol Header: Codable, Address, LosslessStringConvertible {
     init(node: NodeType, codec: Codecs)
 
     init(rawCID: String, node: NodeType?)
+    /// Designated initializer. All other inits delegate to this one.
     init(rawCID: String, node: NodeType?, encryptionInfo: EncryptionInfo?)
+    /// Creates an encrypted header by serializing and encrypting the node with the given key.
     init(node: NodeType, key: SymmetricKey) throws
+
+    func resolve(paths: ArrayTrie<ResolutionStrategy>, fetcher: Fetcher) async throws -> Self
+    func resolveRecursive(fetcher: Fetcher) async throws -> Self
+    func resolve(fetcher: Fetcher) async throws -> Self
+    func proof(paths: ArrayTrie<SparseMerkleProof>, fetcher: Fetcher) async throws -> Self
+    func transform(transforms: ArrayTrie<Transform>) throws -> Self?
+    func transform(transforms: ArrayTrie<Transform>, keyProvider: KeyProvider?) throws -> Self?
+    func storeRecursively(storer: Storer) throws
+    func removingNode() -> Self
+    func encrypt(encryption: ArrayTrie<EncryptionStrategy>) throws -> Self
+    func encryptSelf(key: SymmetricKey) throws -> Self
 }
 
 public extension Header {
@@ -126,6 +161,10 @@ public extension Header {
         guard let info = encryptionInfo, let keyProvider = keyProvider else { return Self(node: node) }
         guard let key = keyProvider.key(for: info.keyHash) else { throw DataErrors.keyNotFound }
         return try Self(node: node, key: key)
+    }
+
+    func transform(transforms: ArrayTrie<Transform>) throws -> Self? {
+        return try transform(transforms: transforms, keyProvider: nil)
     }
 
     func transform(transforms: ArrayTrie<Transform>, keyProvider: KeyProvider?) throws -> Self? {

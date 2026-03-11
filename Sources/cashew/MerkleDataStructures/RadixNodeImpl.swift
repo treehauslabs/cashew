@@ -1,5 +1,6 @@
 import Foundation
 
+/// Default concrete implementation of ``RadixNode``.
 public struct RadixNodeImpl<Value>: RadixNode where Value: Codable, Value: Sendable, Value: LosslessStringConvertible {
     public typealias ValueType = Value
     public typealias ChildType = RadixHeaderImpl<Value>

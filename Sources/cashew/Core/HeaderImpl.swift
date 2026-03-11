@@ -4,6 +4,17 @@ import Multihash
 import CID
 import Crypto
 
+/// Generic concrete implementation of ``Header``.
+///
+/// Wraps any ``Node`` type with a CID and optional encryption metadata.
+/// The node is stored in a ``Box`` to allow the struct to remain `Sendable`
+/// while holding a reference to the (potentially large) deserialized node.
+///
+/// ```swift
+/// typealias UserHeader = HeaderImpl<UserNode>
+/// let header = UserHeader(node: myUser)       // computes CID automatically
+/// let lazy   = UserHeader(rawCID: someCID)    // node loaded on resolve
+/// ```
 public struct HeaderImpl<NodeType: Node>: Header {
     public let rawCID: String
     public let rawNode: Box<NodeType>?
@@ -17,30 +28,6 @@ public struct HeaderImpl<NodeType: Node>: Header {
         self.rawCID = rawCID
         self.rawNode = node.map { Box($0) }
         self.encryptionInfo = encryptionInfo
-    }
-
-    public init(rawCID: String) {
-        self.rawCID = rawCID
-        self.rawNode = nil
-        self.encryptionInfo = nil
-    }
-
-    public init(rawCID: String, node: NodeType?) {
-        self.rawCID = rawCID
-        self.rawNode = node.map { Box($0) }
-        self.encryptionInfo = nil
-    }
-
-    public init(node: NodeType) {
-        self.rawNode = Box(node)
-        self.rawCID = Self.createSyncCID(for: node, codec: Self.defaultCodec)
-        self.encryptionInfo = nil
-    }
-
-    public init(node: NodeType, codec: Codecs) {
-        self.rawNode = Box(node)
-        self.rawCID = Self.createSyncCID(for: node, codec: codec)
-        self.encryptionInfo = nil
     }
 
     public init(node: NodeType, key: SymmetricKey) throws {
@@ -75,6 +62,8 @@ extension HeaderImpl: Codable where NodeType: Codable {
 }
 
 
+/// Heap-allocated wrapper that lets value-type ``Header`` structs hold a
+/// potentially large ``Node`` by reference, avoiding repeated copies.
 public final class Box<T: Sendable>: Sendable {
    let boxed: T
    init(_ thingToBox: T) { boxed = thingToBox }

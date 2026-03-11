@@ -1,5 +1,12 @@
 import ArrayTrie
 
+/// A persistent, content-addressed key-value store backed by a compressed radix trie.
+///
+/// Keys are strings; values can be any `Codable & Sendable & LosslessStringConvertible` type.
+/// Each mutation returns a new root that shares unchanged subtrees with the original,
+/// and every node is identified by its CID (content hash).
+///
+/// Use ``MerkleDictionaryImpl`` as the concrete implementation.
 public protocol MerkleDictionary: Node {
     associatedtype ValueType
     associatedtype ChildType: RadixHeader where ChildType.NodeType.ValueType == ValueType
@@ -15,7 +22,7 @@ public extension MerkleDictionary {
         self.init(children: [:], count: 0)
     }
     
-    func get(property: PathSegment) -> Address? {
+    func get(property: PathSegment) -> (any Header)? {
         guard let char = property.first else { return nil }
         return children[char]
     }
@@ -24,7 +31,7 @@ public extension MerkleDictionary {
         return Set(children.keys.map { String($0) })
     }
     
-    func set(properties: [PathSegment: Address]) -> Self {
+    func set(properties: [PathSegment: any Header]) -> Self {
         var newProperties = [Character: ChildType]()
         for property in properties {
             newProperties[property.key.first!] = property.value as? ChildType

@@ -1,6 +1,10 @@
 import Foundation
 import Crypto
 
+/// Metadata stored alongside an encrypted ``Header`` to enable decryption.
+///
+/// Contains the SHA-256 hash of the encryption key (for key lookup via
+/// ``KeyProvider``) and the AES-GCM initialization vector.
 public struct EncryptionInfo: Codable, Equatable, Sendable {
     public let keyHash: String
     public let iv: String

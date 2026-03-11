@@ -1,3 +1,4 @@
+/// Default concrete implementation of ``MerkleSet`` with `String` values.
 public struct MerkleSetImpl: MerkleSet {
     public typealias ValueType = String
     public typealias ChildType = RadixHeaderImpl<String>

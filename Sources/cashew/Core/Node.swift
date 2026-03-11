@@ -1,18 +1,36 @@
 import ArrayTrie
 import Foundation
 import Multicodec
-import CollectionConcurrencyKit
 
+/// A content-addressed tree node in a Merkle data structure.
+///
+/// Nodes form the internal structure of Merkle tries. Each node can hold child
+/// references (as ``Header`` values) and supports immutable updates via
+/// copy-on-write semantics. Leaf nodes with no children conform via ``Scalar``.
+///
+/// **Minimal conformance** requires only three members:
+/// ```swift
+/// struct MyNode: Node {
+///     func get(property: PathSegment) -> (any Header)? { ... }
+///     func properties() -> Set<PathSegment> { ... }
+///     func set(properties: [PathSegment: any Header]) -> Self { ... }
+/// }
+/// ```
+/// All other methods (`resolve`, `transform`, `proof`, `encrypt`, `storeRecursively`)
+/// have default implementations provided by protocol extensions.
+/// `Codable` and `LosslessStringConvertible` are auto-synthesized from JSON serialization.
 public protocol Node: CashewQueryable, Codable, LosslessStringConvertible, Sendable {
     typealias PathSegment = String
 
-    // traversal
-    func get(property: PathSegment) -> Address?
+    /// Returns the child header at the given property key, or nil if absent.
+    func get(property: PathSegment) -> (any Header)?
+
+    /// Returns the set of all property keys that have children.
     func properties() -> Set<PathSegment>
-    
-    // update
-    func set(properties: [PathSegment: Address]) -> Self
-    
+
+    /// Returns a new node with the given properties replaced.
+    func set(properties: [PathSegment: any Header]) -> Self
+
     func resolve(paths: ArrayTrie<ResolutionStrategy>, fetcher: Fetcher) async throws -> Self
     func storeRecursively(storer: Storer) throws
     func transform(transforms: ArrayTrie<Transform>) throws -> Self?
@@ -65,7 +83,6 @@ extension Node {
     }
     
     func commonPrefix(_ slice1: ArraySlice<Character>, _ slice2: ArraySlice<Character>) -> String {
-        // Optimize: Pre-allocate string capacity and avoid repeated memory allocations
         let maxLength = min(slice1.count, slice2.count)
         var result = ""
         result.reserveCapacity(maxLength)

@@ -2,46 +2,61 @@ import ArrayTrie
 
 public extension Node {
     func resolveRecursive(fetcher: Fetcher) async throws -> Self {
-        let newProperties = ThreadSafeDictionary<PathSegment, Address>()
-        
-        try await properties().concurrentForEach { property in
-            if let address = get(property: property) {
-                let resolvedAddress = try await address.resolveRecursive(fetcher: fetcher)
-                await newProperties.set(property, value: resolvedAddress)
+        let newProperties = try await withThrowingTaskGroup(of: (PathSegment, any Header).self) { group in
+            for property in properties() {
+                group.addTask {
+                    guard let address = get(property: property) else { throw ResolutionErrors.typeError("missing property during resolution") }
+                    let resolved = try await address.resolveRecursive(fetcher: fetcher)
+                    return (property, resolved)
+                }
             }
+            var result = [PathSegment: any Header]()
+            for try await (key, value) in group {
+                result[key] = value
+            }
+            return result
         }
-        
-        return set(properties: await newProperties.allKeyValuePairs())
+        return set(properties: newProperties)
     }
-    
+
     func resolve(paths: ArrayTrie<ResolutionStrategy>, fetcher: Fetcher) async throws -> Self {
-        let newProperties = ThreadSafeDictionary<PathSegment, Address>()
-        
-        try await properties().concurrentForEach { property in
-            guard let address = get(property: property) else { return }
-            
-            if paths.get([property]) == .recursive {
-                let resolvedAddress = try await address.resolveRecursive(fetcher: fetcher)
-                await newProperties.set(property, value: resolvedAddress)
-            }
-            else if let nextPaths = paths.traverse([property]) {
-                if (!nextPaths.isEmpty) {
-                    let resolvedAddress = try await address.resolve(paths: nextPaths, fetcher: fetcher)
-                    await newProperties.set(property, value: resolvedAddress)
+        let box = SendableBox(paths)
+        let newProperties = try await withThrowingTaskGroup(of: (PathSegment, any Header)?.self) { group in
+            for property in properties() {
+                group.addTask {
+                    let paths = box.value
+                    guard let address = get(property: property) else { return nil }
+
+                    if paths.get([property]) == .recursive {
+                        let resolved = try await address.resolveRecursive(fetcher: fetcher)
+                        return (property, resolved)
+                    }
+                    else if let nextPaths = paths.traverse([property]) {
+                        if !nextPaths.isEmpty {
+                            let resolved = try await address.resolve(paths: nextPaths, fetcher: fetcher)
+                            return (property, resolved)
+                        }
+                        else if paths.get([property]) == .targeted {
+                            let resolved = try await address.resolve(fetcher: fetcher)
+                            return (property, resolved)
+                        }
+                        else {
+                            return (property, address)
+                        }
+                    }
+                    else {
+                        return (property, address)
+                    }
                 }
-                else if paths.get([property]) == .targeted {
-                    let resolvedAddress = try await address.resolve(fetcher: fetcher)
-                    await newProperties.set(property, value: resolvedAddress)
-                }
-                else {
-                    await newProperties.set(property, value: address)
+            }
+            var result = [PathSegment: any Header]()
+            for try await pair in group {
+                if let (key, value) = pair {
+                    result[key] = value
                 }
             }
-            else {
-                await newProperties.set(property, value: address)
-            }
+            return result
         }
-        
-        return set(properties: await newProperties.allKeyValuePairs())
+        return set(properties: newProperties)
     }
 }
