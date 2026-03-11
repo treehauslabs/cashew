@@ -53,16 +53,22 @@ public struct CashewPlan {
     public func resolutionPaths() -> ArrayTrie<ResolutionStrategy> {
         var paths = ArrayTrie<ResolutionStrategy>()
         for step in steps {
-            guard case .evaluate(let expr) = step else { continue }
-            switch expr {
-            case .get(let key), .contains(let key), .set(let key, _):
-                paths.set([key], value: .targeted)
-            case .keys, .sortedKeys, .values, .sortedValues:
-                paths.set([""], value: .recursive)
-            case .count:
+            switch step {
+            case .transform:
                 paths.set([""], value: .list)
-            default:
-                break
+            case .evaluate(let expr):
+                switch expr {
+                case .get(let key), .contains(let key), .set(let key, _):
+                    paths.set([key], value: .targeted)
+                case .keys, .sortedKeys, .values, .sortedValues:
+                    paths.set([""], value: .recursive)
+                case .count:
+                    paths.set([""], value: .list)
+                case .getAt, .first, .last, .append:
+                    paths.set([""], value: .recursive)
+                default:
+                    break
+                }
             }
         }
         return paths

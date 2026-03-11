@@ -438,7 +438,7 @@ struct MerkleArrayNestedRangeTests {
 
         let unresolved = HeaderImpl<OuterArray>(rawCID: header.rawCID)
         let resolved = try await unresolved.resolve(fetcher: fetcher)
-        let rangeResolved = try await resolved.node!.resolve(paths: OuterArray.rangePaths(0..<2, innerStrategy: .range(1..<3)), fetcher: fetcher)
+        let rangeResolved = try await resolved.node!.resolve(paths: OuterArray.rangePaths(0..<2, innerRange: 1..<3), fetcher: fetcher)
 
         let el0 = try rangeResolved.get(at: 0)
         #expect(el0 != nil)
@@ -936,7 +936,7 @@ struct MerkleArrayRangeQueryPerformanceTests {
         let resolved = try await HeaderImpl<OuterArray>(rawCID: outerHeader.rawCID).resolve(fetcher: fetcher)
 
         fetcher.resetFetchCount()
-        let rangeResult = try await resolved.node!.resolve(paths: OuterArray.rangePaths(2..<4, innerStrategy: .range(5..<8)), fetcher: fetcher)
+        let rangeResult = try await resolved.node!.resolve(paths: OuterArray.rangePaths(2..<4, innerRange: 5..<8), fetcher: fetcher)
         let rangeFetches = fetcher.fetchCount
 
         let el2 = try rangeResult.get(at: 2)!

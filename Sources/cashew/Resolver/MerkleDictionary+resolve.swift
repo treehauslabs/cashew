@@ -19,6 +19,22 @@ public extension MerkleDictionary {
             return try await resolveRecursive(fetcher: fetcher)
         }
         let newProperties = ThreadSafeDictionary<Character, ChildType>()
+        if case .range(let after, _) = paths.get([""]) {
+            let afterFirstChar = after?.first
+            try await properties().concurrentForEach { property in
+                let char = property.first!
+                if let afterChar = afterFirstChar, char < afterChar {
+                    await newProperties.set(char, value: children[char]!)
+                    return
+                }
+                if let childPath = paths.traverseChild(char) {
+                    await newProperties.set(char, value: try await children[char]!.resolveList(paths: childPath, fetcher: fetcher))
+                } else {
+                    await newProperties.set(char, value: try await children[char]!.resolveList(paths: ArrayTrie(), fetcher: fetcher))
+                }
+            }
+            return await Self(children: newProperties.allKeyValuePairs(), count: count)
+        }
         if paths.get([""]) == .list {
             try await properties().concurrentForEach { property in
                 if let childPath = paths.traverseChild(property.first!) {
@@ -63,6 +79,12 @@ public extension MerkleDictionary {
             await newProperties.set(property.first!, value: try await children[property.first!]!.resolveList(paths: ArrayTrie(), fetcher: fetcher))
         }
         return await Self(children: newProperties.allKeyValuePairs(), count: count)
+    }
+
+    static func rangePaths(after: String? = nil, limit: Int) -> ArrayTrie<ResolutionStrategy> {
+        var paths = ArrayTrie<ResolutionStrategy>()
+        paths.set([""], value: .range(after: after, limit: limit))
+        return paths
     }
 
     func resolve(fetcher: Fetcher) async throws -> Self {

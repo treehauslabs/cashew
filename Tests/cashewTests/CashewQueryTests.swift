@@ -981,3 +981,461 @@ struct CashewQueryTests {
         }
     }
 }
+
+@Suite("Query on All Data Structure Types")
+struct QueryAllTypesTests {
+
+    typealias Dict = MerkleDictionaryImpl<String>
+    typealias Arr = MerkleArrayImpl<String>
+    typealias Set_ = MerkleSetImpl
+
+    @Suite("MerkleSet Queries")
+    struct MerkleSetQueryTests {
+
+        @Test("Set: keys returns members")
+        func testSetKeys() throws {
+            let set = try MerkleSetImpl().insert("alice").insert("bob").insert("carol")
+            let (_, result) = try set.query("keys sorted")
+            #expect(result == .list(["alice", "bob", "carol"]))
+        }
+
+        @Test("Set: count returns member count")
+        func testSetCount() throws {
+            let set = try MerkleSetImpl().insert("x").insert("y").insert("z")
+            let (_, result) = try set.query("count")
+            #expect(result == .count(3))
+        }
+
+        @Test("Set: contains checks membership")
+        func testSetContains() throws {
+            let set = try MerkleSetImpl().insert("alice").insert("bob")
+            let (_, yes) = try set.query(#"contains "alice""#)
+            let (_, no) = try set.query(#"contains "eve""#)
+            #expect(yes == .bool(true))
+            #expect(no == .bool(false))
+        }
+
+        @Test("Set: delete removes a member")
+        func testSetDelete() throws {
+            let set = try MerkleSetImpl().insert("a").insert("b").insert("c")
+            let (updated, _) = try set.query(#"delete "b""#)
+            let (_, result) = try updated.query("keys sorted")
+            #expect(result == .list(["a", "c"]))
+        }
+
+        @Test("Set: insert via set command adds member")
+        func testSetInsert() throws {
+            let set = try MerkleSetImpl().insert("a")
+            let (updated, _) = try set.query(#"insert "b" = """#)
+            #expect(updated.count == 2)
+            #expect(try updated.contains("b"))
+        }
+
+        @Test("Set: pipeline insert then keys sorted")
+        func testSetPipeline() throws {
+            let (_, result) = try MerkleSetImpl().query(
+                #"insert "cherry" = "" | insert "apple" = "" | insert "banana" = "" | keys sorted"#
+            )
+            #expect(result == .list(["apple", "banana", "cherry"]))
+        }
+    }
+
+    @Suite("Header Queries on Dictionary")
+    struct HeaderDictQueryTests {
+
+        @Test("Header wrapping dict: query keys")
+        func testHeaderDictKeys() throws {
+            let dict = try Dict()
+                .inserting(key: "x", value: "1")
+                .inserting(key: "y", value: "2")
+            let header = HeaderImpl(node: dict)
+            let (_, result) = try header.query("keys sorted")
+            #expect(result == .list(["x", "y"]))
+        }
+
+        @Test("Header wrapping dict: get value")
+        func testHeaderDictGet() throws {
+            let dict = try Dict().inserting(key: "name", value: "alice")
+            let header = HeaderImpl(node: dict)
+            let (_, result) = try header.query(#"get "name""#)
+            #expect(result == .value("alice"))
+        }
+
+        @Test("Header wrapping dict: transform updates CID")
+        func testHeaderDictTransform() throws {
+            let dict = try Dict().inserting(key: "a", value: "1")
+            let original = HeaderImpl(node: dict)
+            let (updated, _) = try original.query(#"insert "b" = "2""#)
+            #expect(updated.rawCID != original.rawCID)
+            #expect(updated.node!.count == 2)
+        }
+
+        @Test("Header wrapping dict: async query with fetcher")
+        func testHeaderDictAsync() async throws {
+            let dict = try Dict()
+                .inserting(key: "alpha", value: "first")
+                .inserting(key: "beta", value: "second")
+            let header = HeaderImpl(node: dict)
+            let store = TestStoreFetcher()
+            try header.storeRecursively(storer: store)
+
+            let unresolved = HeaderImpl<Dict>(rawCID: header.rawCID)
+            let (resolved, result) = try await unresolved.query(#"get "alpha""#, fetcher: store)
+            #expect(result == .value("first"))
+            #expect(resolved.node != nil)
+        }
+    }
+
+    @Suite("Header Queries on Array")
+    struct HeaderArrayQueryTests {
+
+        @Test("Header wrapping array: get at index")
+        func testHeaderArrayGetAt() throws {
+            let arr = try Arr().append("zero").append("one").append("two")
+            let header = HeaderImpl(node: arr)
+            let (_, result) = try header.query("get at 1")
+            #expect(result == .value("one"))
+        }
+
+        @Test("Header wrapping array: first and last")
+        func testHeaderArrayFirstLast() throws {
+            let arr = try Arr().append("a").append("b").append("c")
+            let header = HeaderImpl(node: arr)
+            let (_, first) = try header.query("first")
+            let (_, last) = try header.query("last")
+            #expect(first == .value("a"))
+            #expect(last == .value("c"))
+        }
+
+        @Test("Header wrapping array: count")
+        func testHeaderArrayCount() throws {
+            let arr = try Arr().append("x").append("y")
+            let header = HeaderImpl(node: arr)
+            let (_, result) = try header.query("count")
+            #expect(result == .count(2))
+        }
+
+        @Test("Header wrapping array: append via query")
+        func testHeaderArrayAppend() throws {
+            let arr = try Arr().append("a")
+            let header = HeaderImpl(node: arr)
+            let (updated, _) = try header.query(#"append "b""#)
+            #expect(updated.node!.count == 2)
+            let (_, result) = try updated.query("last")
+            #expect(result == .value("b"))
+        }
+
+        @Test("Header wrapping array: async query with fetcher")
+        func testHeaderArrayAsync() async throws {
+            let arr = try Arr().append("p").append("q").append("r")
+            let header = HeaderImpl(node: arr)
+            let store = TestStoreFetcher()
+            try header.storeRecursively(storer: store)
+
+            let unresolved = HeaderImpl<Arr>(rawCID: header.rawCID)
+            let (_, result) = try await unresolved.query("get at 2", fetcher: store)
+            #expect(result == .value("r"))
+        }
+    }
+
+    @Suite("Header Queries on Set")
+    struct HeaderSetQueryTests {
+
+        @Test("Header wrapping set: keys and count")
+        func testHeaderSetKeysCount() throws {
+            let set = try MerkleSetImpl().insert("red").insert("green").insert("blue")
+            let header = HeaderImpl(node: set)
+            let (_, keys) = try header.query("keys sorted")
+            let (_, count) = try header.query("count")
+            #expect(keys == .list(["blue", "green", "red"]))
+            #expect(count == .count(3))
+        }
+
+        @Test("Header wrapping set: contains and delete")
+        func testHeaderSetContainsDelete() throws {
+            let set = try MerkleSetImpl().insert("a").insert("b").insert("c")
+            let header = HeaderImpl(node: set)
+            let (_, yes) = try header.query(#"contains "b""#)
+            #expect(yes == .bool(true))
+            let (updated, _) = try header.query(#"delete "b""#)
+            let (_, no) = try updated.query(#"contains "b""#)
+            #expect(no == .bool(false))
+        }
+    }
+
+    @Suite("Nested Data Structure Queries")
+    struct NestedQueryTests {
+
+        typealias InnerDict = MerkleDictionaryImpl<String>
+        typealias DictOfDicts = MerkleDictionaryImpl<HeaderImpl<InnerDict>>
+        typealias ArrayOfDicts = MerkleArrayImpl<HeaderImpl<InnerDict>>
+        typealias InnerArray = MerkleArrayImpl<String>
+        typealias DictOfArrays = MerkleDictionaryImpl<HeaderImpl<InnerArray>>
+        typealias ArrayOfArrays = MerkleArrayImpl<HeaderImpl<InnerArray>>
+
+        @Test("Dict of dicts: outer query returns header CIDs")
+        func testDictOfDictsOuterQuery() throws {
+            let inner1 = try InnerDict().inserting(key: "name", value: "alice")
+            let inner2 = try InnerDict().inserting(key: "name", value: "bob")
+            let h1 = HeaderImpl(node: inner1)
+            let h2 = HeaderImpl(node: inner2)
+
+            let outer = try DictOfDicts()
+                .inserting(key: "user1", value: h1)
+                .inserting(key: "user2", value: h2)
+
+            let (_, result) = try outer.query("keys sorted")
+            #expect(result == .list(["user1", "user2"]))
+            #expect(outer.count == 2)
+        }
+
+        @Test("Dict of dicts: get returns inner header CID string")
+        func testDictOfDictsGet() throws {
+            let inner = try InnerDict().inserting(key: "role", value: "admin")
+            let h = HeaderImpl(node: inner)
+            let outer = try DictOfDicts().inserting(key: "profile", value: h)
+
+            let (_, result) = try outer.query(#"get "profile""#)
+            if case .value(let cid) = result {
+                #expect(cid == h.rawCID)
+            } else {
+                Issue.record("Expected .value with CID")
+            }
+        }
+
+        @Test("Dict of dicts: delete inner entry")
+        func testDictOfDictsDelete() throws {
+            let inner1 = HeaderImpl(node: try InnerDict().inserting(key: "k", value: "v1"))
+            let inner2 = HeaderImpl(node: try InnerDict().inserting(key: "k", value: "v2"))
+            let outer = try DictOfDicts()
+                .inserting(key: "a", value: inner1)
+                .inserting(key: "b", value: inner2)
+
+            let (updated, _) = try outer.query(#"delete "a""#)
+            #expect(updated.count == 1)
+            let (_, result) = try updated.query(#"contains "a""#)
+            #expect(result == .bool(false))
+        }
+
+        @Test("Array of dicts: count and get at index")
+        func testArrayOfDictsQuery() throws {
+            let d1 = HeaderImpl(node: try InnerDict().inserting(key: "city", value: "NYC"))
+            let d2 = HeaderImpl(node: try InnerDict().inserting(key: "city", value: "LA"))
+            let d3 = HeaderImpl(node: try InnerDict().inserting(key: "city", value: "SF"))
+            let arr = try ArrayOfDicts().append(d1).append(d2).append(d3)
+
+            let (_, count) = try arr.query("count")
+            #expect(count == .count(3))
+
+            let (_, first) = try arr.query("first")
+            if case .value(let cid) = first {
+                #expect(cid == d1.rawCID)
+            } else {
+                Issue.record("Expected .value with CID")
+            }
+        }
+
+        @Test("Dict of arrays: outer keys, inner accessible via resolve")
+        func testDictOfArraysQuery() throws {
+            let a1 = HeaderImpl(node: try InnerArray().append("x").append("y"))
+            let a2 = HeaderImpl(node: try InnerArray().append("p").append("q").append("r"))
+            let dict = try DictOfArrays()
+                .inserting(key: "list1", value: a1)
+                .inserting(key: "list2", value: a2)
+
+            let (_, keys) = try dict.query("keys sorted")
+            #expect(keys == .list(["list1", "list2"]))
+            let (_, count) = try dict.query("count")
+            #expect(count == .count(2))
+        }
+
+        @Test("Array of arrays: nested structure navigable")
+        func testArrayOfArraysQuery() throws {
+            let a1 = HeaderImpl(node: try InnerArray().append("a0").append("a1"))
+            let a2 = HeaderImpl(node: try InnerArray().append("b0").append("b1").append("b2"))
+            let outer = try ArrayOfArrays().append(a1).append(a2)
+
+            let (_, count) = try outer.query("count")
+            #expect(count == .count(2))
+            let (_, last) = try outer.query("last")
+            if case .value(let cid) = last {
+                #expect(cid == a2.rawCID)
+            } else {
+                Issue.record("Expected .value with CID")
+            }
+        }
+
+        @Test("Three-level nesting: dict of dict of dicts")
+        func testThreeLevelNesting() throws {
+            typealias MidDict = MerkleDictionaryImpl<HeaderImpl<InnerDict>>
+            typealias OuterDict = MerkleDictionaryImpl<HeaderImpl<MidDict>>
+
+            let leaf1 = try InnerDict().inserting(key: "val", value: "1")
+            let leaf2 = try InnerDict().inserting(key: "val", value: "2")
+            let mid = try MidDict()
+                .inserting(key: "leaf1", value: HeaderImpl(node: leaf1))
+                .inserting(key: "leaf2", value: HeaderImpl(node: leaf2))
+            let outer = try OuterDict()
+                .inserting(key: "branch", value: HeaderImpl(node: mid))
+
+            let (_, outerKeys) = try outer.query("keys")
+            if case .list(let keys) = outerKeys {
+                #expect(keys.contains("branch"))
+            } else {
+                Issue.record("Expected .list")
+            }
+
+            let innerHeader = try outer.get(key: "branch")!
+            let midDict = innerHeader.node!
+            let (_, midKeys) = try midDict.query("keys sorted")
+            #expect(midKeys == .list(["leaf1", "leaf2"]))
+
+            let leafHeader = try midDict.get(key: "leaf1")!
+            let leafDict = leafHeader.node!
+            let (_, leafResult) = try leafDict.query(#"get "val""#)
+            #expect(leafResult == .value("1"))
+        }
+    }
+
+    @Suite("Store/Resolve/Query Cycle with Nested Types")
+    struct StoreResolveQueryTests {
+
+        typealias InnerDict = MerkleDictionaryImpl<String>
+        typealias DictOfDicts = MerkleDictionaryImpl<HeaderImpl<InnerDict>>
+
+        @Test("Dict of dicts: full store, resolve from CID, query")
+        func testDictOfDictsStoreResolve() async throws {
+            let inner1 = try InnerDict()
+                .inserting(key: "name", value: "alice")
+                .inserting(key: "role", value: "engineer")
+            let inner2 = try InnerDict()
+                .inserting(key: "name", value: "bob")
+                .inserting(key: "role", value: "designer")
+            let outer = try DictOfDicts()
+                .inserting(key: "user1", value: HeaderImpl(node: inner1))
+                .inserting(key: "user2", value: HeaderImpl(node: inner2))
+
+            let store = TestStoreFetcher()
+            let header = HeaderImpl(node: outer)
+            try header.storeRecursively(storer: store)
+
+            let resolved = try await HeaderImpl<DictOfDicts>(rawCID: header.rawCID)
+                .resolveRecursive(fetcher: store)
+
+            let (_, keys) = try resolved.query("keys sorted")
+            #expect(keys == .list(["user1", "user2"]))
+            #expect(resolved.node!.count == 2)
+
+            let innerHeader = try resolved.node!.get(key: "user1")!
+            let innerResolved = try await innerHeader.resolve(fetcher: store)
+            let (_, name) = try innerResolved.query(#"get "name""#)
+            #expect(name == .value("alice"))
+        }
+
+        @Test("Array: store, resolve from CID, query via header")
+        func testArrayStoreResolveQuery() async throws {
+            typealias Arr = MerkleArrayImpl<String>
+            let arr = try Arr().append("first").append("second").append("third")
+            let store = TestStoreFetcher()
+            let header = HeaderImpl(node: arr)
+            try header.storeRecursively(storer: store)
+
+            let unresolved = HeaderImpl<Arr>(rawCID: header.rawCID)
+            let (_, result) = try await unresolved.query("get at 1", fetcher: store)
+            #expect(result == .value("second"))
+        }
+
+        @Test("Set: store, resolve from CID, query via header")
+        func testSetStoreResolveQuery() async throws {
+            let set = try MerkleSetImpl().insert("red").insert("green").insert("blue")
+            let store = TestStoreFetcher()
+            let header = HeaderImpl(node: set)
+            try header.storeRecursively(storer: store)
+
+            let unresolved = HeaderImpl<MerkleSetImpl>(rawCID: header.rawCID)
+            let (_, result) = try await unresolved.query("keys sorted", fetcher: store)
+            #expect(result == .list(["blue", "green", "red"]))
+        }
+
+        @Test("Nested array of dicts: store, resolve, navigate")
+        func testNestedArrayOfDictsStoreResolve() async throws {
+            typealias InnerDict = MerkleDictionaryImpl<String>
+            typealias ArrOfDicts = MerkleArrayImpl<HeaderImpl<InnerDict>>
+
+            let d1 = try InnerDict()
+                .inserting(key: "fruit", value: "apple")
+                .inserting(key: "color", value: "red")
+            let d2 = try InnerDict()
+                .inserting(key: "fruit", value: "banana")
+                .inserting(key: "color", value: "yellow")
+            let arr = try ArrOfDicts()
+                .append(HeaderImpl(node: d1))
+                .append(HeaderImpl(node: d2))
+
+            let store = TestStoreFetcher()
+            let header = HeaderImpl(node: arr)
+            try header.storeRecursively(storer: store)
+
+            let resolved = try await HeaderImpl<ArrOfDicts>(rawCID: header.rawCID)
+                .resolveRecursive(fetcher: store)
+            let (_, count) = try resolved.query("count")
+            #expect(count == .count(2))
+
+            let innerHeader = try resolved.node!.get(at: 0)!
+            let innerResolved = try await innerHeader.resolve(fetcher: store)
+            let (_, fruit) = try await innerResolved.query(#"get "fruit""#, fetcher: store)
+            #expect(fruit == .value("apple"))
+        }
+
+        @Test("Transform via query then re-store preserves integrity")
+        func testTransformRestore() async throws {
+            let dict = try InnerDict()
+                .inserting(key: "a", value: "1")
+                .inserting(key: "b", value: "2")
+            let store = TestStoreFetcher()
+            let h1 = HeaderImpl(node: dict)
+            try h1.storeRecursively(storer: store)
+
+            let (updated, _) = try await HeaderImpl<InnerDict>(rawCID: h1.rawCID)
+                .query(#"insert "c" = "3" | delete "a""#, fetcher: store)
+            try updated.storeRecursively(storer: store)
+
+            let reloaded = try await HeaderImpl<InnerDict>(rawCID: updated.rawCID)
+                .resolveRecursive(fetcher: store)
+            let (_, result) = try reloaded.query("keys sorted")
+            #expect(result == .list(["b", "c"]))
+        }
+
+        @Test("Dict of dicts: transform outer then verify inner intact")
+        func testNestedTransformIntegrity() async throws {
+            let inner1 = try InnerDict().inserting(key: "x", value: "1")
+            let inner2 = try InnerDict().inserting(key: "y", value: "2")
+            let inner3 = try InnerDict().inserting(key: "z", value: "3")
+            let outer = try DictOfDicts()
+                .inserting(key: "a", value: HeaderImpl(node: inner1))
+                .inserting(key: "b", value: HeaderImpl(node: inner2))
+
+            let store = TestStoreFetcher()
+            let h = HeaderImpl(node: outer)
+            try h.storeRecursively(storer: store)
+            try HeaderImpl(node: inner3).storeRecursively(storer: store)
+
+            let resolved = try await HeaderImpl<DictOfDicts>(rawCID: h.rawCID)
+                .resolveRecursive(fetcher: store)
+
+            let h3Cid = HeaderImpl(node: inner3).rawCID
+            let (updated, _) = try resolved.query(
+                #"delete "a" | set "c" = "\#(h3Cid)""#
+            )
+            #expect(updated.node!.count == 2)
+
+            let (_, keys) = try updated.query("keys sorted")
+            #expect(keys == .list(["b", "c"]))
+
+            let bHeader = try updated.node!.get(key: "b")!
+            let bResolved = try await bHeader.resolve(fetcher: store)
+            let (_, yVal) = try await bResolved.query(#"get "y""#, fetcher: store)
+            #expect(yVal == .value("2"))
+        }
+    }
+}

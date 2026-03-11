@@ -38,9 +38,9 @@ public enum ResolutionStrategy: Equatable, Sendable {
      */
     case list
 
-    /// Resolves a range of indices in a MerkleArray. When encountered by a MerkleArray's
-    /// resolve(paths:), expands into targeted resolutions for each index in the range.
-    /// At intermediate layers (RadixNode, Header), flows through via paths.traverse
-    /// until it reaches a MerkleArray node that can expand it.
-    case range(Range<Int>)
+    /// Resolves a sorted range of keys with list-like behavior. Loads tree structure
+    /// for up to `limit` keys after the cursor without resolving nested addresses.
+    /// Works on both MerkleDictionary (string key cursors) and MerkleArray (binary
+    /// key cursors converted from integer indices via convenience methods).
+    case range(after: String?, limit: Int)
 }

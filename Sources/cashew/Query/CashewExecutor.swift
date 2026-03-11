@@ -94,6 +94,36 @@ public extension MerkleDictionary where ValueType: LosslessStringConvertible {
     }
 }
 
+public extension Header where NodeType: MerkleDictionary, NodeType.ValueType: LosslessStringConvertible {
+    func query(_ input: String) throws -> (Self, CashewResult) {
+        guard let node = node else { throw DataErrors.nodeNotAvailable }
+        let (updatedNode, result) = try node.query(input)
+        return (Self(node: updatedNode), result)
+    }
+
+    func query(_ input: String, fetcher: Fetcher) async throws -> (Self, CashewResult) {
+        let loaded = node != nil ? self : try await resolve(fetcher: fetcher)
+        guard let loadedNode = loaded.node else { throw DataErrors.nodeNotAvailable }
+        let (updatedNode, result) = try await loadedNode.query(input, fetcher: fetcher)
+        return (Self(node: updatedNode), result)
+    }
+}
+
+public extension Header where NodeType: MerkleArray, NodeType.ValueType: LosslessStringConvertible {
+    func query(_ input: String) throws -> (Self, CashewResult) {
+        guard let node = node else { throw DataErrors.nodeNotAvailable }
+        let (updatedNode, result): (NodeType, CashewResult) = try node.query(input)
+        return (Self(node: updatedNode), result)
+    }
+
+    func query(_ input: String, fetcher: Fetcher) async throws -> (Self, CashewResult) {
+        let loaded = node != nil ? self : try await resolve(fetcher: fetcher)
+        guard let loadedNode = loaded.node else { throw DataErrors.nodeNotAvailable }
+        let (updatedNode, result): (NodeType, CashewResult) = try await loadedNode.query(input, fetcher: fetcher)
+        return (Self(node: updatedNode), result)
+    }
+}
+
 public extension MerkleArray where ValueType: LosslessStringConvertible {
     func query(_ input: String) throws -> (Self, CashewResult) {
         let expressions = try CashewParser.parse(input)

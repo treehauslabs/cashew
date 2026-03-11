@@ -585,7 +585,7 @@ struct TimeSeriesTests {
 
         fetcher.resetFetchCount()
         let partial = try await resolved.node!.resolve(
-            paths: SensorLog.rangePaths(1..<3, innerStrategy: .range(5..<10)), fetcher: fetcher
+            paths: SensorLog.rangePaths(1..<3, innerRange: 5..<10), fetcher: fetcher
         )
         let partialFetches = fetcher.fetchCount
 
@@ -854,5 +854,552 @@ struct AuditTrailTests {
         #expect(proof.rawCID == header.rawCID)
         #expect(try proof.node!.get(key: "tx010") == "1000")
         #expect(try proof.node!.get(key: "tx015") == "1500")
+    }
+}
+
+// MARK: - Token Ledger with Auditable Transfers
+
+@Suite("Real-World: Token Ledger")
+struct TokenLedgerQueryTests {
+
+    typealias Balances = MerkleDictionaryImpl<String>
+    typealias TransferLog = MerkleArrayImpl<String>
+    typealias Ledger = MerkleDictionaryImpl<HeaderImpl<Balances>>
+
+    @Test("Mint tokens, transfer between accounts, verify balances via queries")
+    func testMintAndTransfer() throws {
+        var balances = Balances()
+        let (b1, _) = try balances.query(#"insert "treasury" = "1000000""#)
+        balances = b1
+
+        let (_, treasuryBal) = try balances.query(#"get "treasury""#)
+        #expect(treasuryBal == .value("1000000"))
+
+        let (b2, _) = try balances.query(#"insert "alice" = "0" | insert "bob" = "0""#)
+        balances = b2
+
+        let treasuryAmount = Int(try balances.get(key: "treasury")!)!
+        let transferAmount = 5000
+        let (b3, _) = try balances.query(
+            #"update "treasury" = "\#(treasuryAmount - transferAmount)" | update "alice" = "\#(transferAmount)""#
+        )
+        balances = b3
+
+        let (_, aliceBal) = try balances.query(#"get "alice""#)
+        #expect(aliceBal == .value("5000"))
+        let (_, newTreasury) = try balances.query(#"get "treasury""#)
+        #expect(newTreasury == .value("995000"))
+    }
+
+    @Test("Full ledger lifecycle: mint, transfer, audit trail, rollback via CID")
+    func testLedgerWithAuditTrail() async throws {
+        let store = TestStoreFetcher()
+
+        var balances = try Balances()
+            .inserting(key: "alice", value: "100")
+            .inserting(key: "bob", value: "50")
+            .inserting(key: "carol", value: "200")
+
+        let v1 = HeaderImpl(node: balances)
+        try v1.storeRecursively(storer: store)
+
+        let (b2, _) = try balances.query(
+            #"update "alice" = "70" | update "bob" = "80""#
+        )
+        balances = b2
+        let v2 = HeaderImpl(node: balances)
+        try v2.storeRecursively(storer: store)
+
+        let (b3, _) = try balances.query(
+            #"update "bob" = "30" | update "carol" = "250""#
+        )
+        let v3 = HeaderImpl(node: b3)
+        try v3.storeRecursively(storer: store)
+
+        #expect(v1.rawCID != v2.rawCID)
+        #expect(v2.rawCID != v3.rawCID)
+
+        let rolledBack = try await HeaderImpl<Balances>(rawCID: v1.rawCID)
+            .query(#"get "alice""#, fetcher: store)
+        #expect(rolledBack.1 == .value("100"))
+
+        let current = try await HeaderImpl<Balances>(rawCID: v3.rawCID)
+            .query("keys sorted", fetcher: store)
+        #expect(current.1 == .list(["alice", "bob", "carol"]))
+
+        let (_, carolBal) = try await HeaderImpl<Balances>(rawCID: v3.rawCID)
+            .query(#"get "carol""#, fetcher: store)
+        #expect(carolBal == .value("250"))
+    }
+
+    @Test("Paginated account listing with sorted keys query")
+    func testPaginatedAccountListing() throws {
+        var balances = Balances()
+        for i in 0..<50 {
+            let name = String(format: "user_%03d", i)
+            balances = try balances.inserting(key: name, value: "\(1000 + i)")
+        }
+
+        let (_, page1) = try balances.query(#"keys sorted limit 10"#)
+        guard case .list(let p1Keys) = page1 else { Issue.record("Expected list"); return }
+        #expect(p1Keys.count == 10)
+        #expect(p1Keys.first == "user_000")
+
+        let (_, page2) = try balances.query(#"keys sorted limit 10 after "\#(p1Keys.last!)""#)
+        guard case .list(let p2Keys) = page2 else { Issue.record("Expected list"); return }
+        #expect(p2Keys.count == 10)
+        #expect(p2Keys.first! > p1Keys.last!)
+    }
+}
+
+// MARK: - Access Control with MerkleSet
+
+@Suite("Real-World: Role-Based Access Control")
+struct AccessControlQueryTests {
+
+    typealias Permissions = MerkleSetImpl
+    typealias RoleStore = MerkleDictionaryImpl<HeaderImpl<Permissions>>
+
+    @Test("Grant and revoke permissions via queries, verify access")
+    func testGrantRevokePermissions() throws {
+        let adminPerms = try Permissions()
+            .insert("read").insert("write").insert("delete").insert("admin")
+
+        let (_, adminKeys) = try adminPerms.query("keys sorted")
+        #expect(adminKeys == .list(["admin", "delete", "read", "write"]))
+
+        let (revoked, _) = try adminPerms.query(#"delete "admin""#)
+        let (_, afterRevoke) = try revoked.query(#"contains "admin""#)
+        #expect(afterRevoke == .bool(false))
+        let (_, stillHasWrite) = try revoked.query(#"contains "write""#)
+        #expect(stillHasWrite == .bool(true))
+    }
+
+    @Test("Multi-role system: check permissions across roles via headers")
+    func testMultiRolePermissionCheck() throws {
+        let viewer = try Permissions().insert("read")
+        let editor = try Permissions().insert("read").insert("write")
+        let admin = try Permissions()
+            .insert("read").insert("write").insert("delete").insert("manage_users")
+
+        let roles = try RoleStore()
+            .inserting(key: "viewer", value: HeaderImpl(node: viewer))
+            .inserting(key: "editor", value: HeaderImpl(node: editor))
+            .inserting(key: "admin", value: HeaderImpl(node: admin))
+
+        let (_, roleList) = try roles.query("keys sorted")
+        #expect(roleList == .list(["admin", "editor", "viewer"]))
+
+        let editorHeader = try roles.get(key: "editor")!
+        let (_, canWrite) = try editorHeader.query(#"contains "write""#)
+        #expect(canWrite == .bool(true))
+        let (_, canDelete) = try editorHeader.query(#"contains "delete""#)
+        #expect(canDelete == .bool(false))
+
+        let adminHeader = try roles.get(key: "admin")!
+        let (_, adminCount) = try adminHeader.query("count")
+        #expect(adminCount == .count(4))
+    }
+
+    @Test("Permission change audit: each mutation produces unique CID")
+    func testPermissionAuditTrail() async throws {
+        let store = TestStoreFetcher()
+
+        let v1 = try Permissions().insert("read")
+        let h1 = HeaderImpl(node: v1)
+        try h1.storeRecursively(storer: store)
+
+        let (v2, _) = try v1.query(#"insert "write" = """#)
+        let h2 = HeaderImpl(node: v2)
+        try h2.storeRecursively(storer: store)
+
+        let (v3, _) = try v2.query(#"delete "read""#)
+        let h3 = HeaderImpl(node: v3)
+        try h3.storeRecursively(storer: store)
+
+        #expect(Set([h1.rawCID, h2.rawCID, h3.rawCID]).count == 3)
+
+        let (_, v1Members) = try await HeaderImpl<Permissions>(rawCID: h1.rawCID)
+            .query("keys sorted", fetcher: store)
+        #expect(v1Members == .list(["read"]))
+
+        let (_, v3Members) = try await HeaderImpl<Permissions>(rawCID: h3.rawCID)
+            .query("keys sorted", fetcher: store)
+        #expect(v3Members == .list(["write"]))
+    }
+
+    @Test("Store role hierarchy, resolve from CID, query nested permissions")
+    func testStoreResolveRoleHierarchy() async throws {
+        let store = TestStoreFetcher()
+
+        let basic = try Permissions().insert("view_dashboard")
+        let support = try Permissions()
+            .insert("view_dashboard").insert("view_tickets").insert("reply_tickets")
+        let engineering = try Permissions()
+            .insert("view_dashboard").insert("deploy").insert("view_logs").insert("ssh_access")
+
+        let roles = try RoleStore()
+            .inserting(key: "basic", value: HeaderImpl(node: basic))
+            .inserting(key: "support", value: HeaderImpl(node: support))
+            .inserting(key: "engineering", value: HeaderImpl(node: engineering))
+
+        let header = HeaderImpl(node: roles)
+        try header.storeRecursively(storer: store)
+
+        let resolved = try await HeaderImpl<RoleStore>(rawCID: header.rawCID)
+            .resolveRecursive(fetcher: store)
+
+        let (_, roleCount) = try resolved.query("count")
+        #expect(roleCount == .count(3))
+
+        let engHeader = try resolved.node!.get(key: "engineering")!
+        let (_, hasDeploy) = try engHeader.query(#"contains "deploy""#)
+        #expect(hasDeploy == .bool(true))
+        let (_, engPerms) = try engHeader.query("keys sorted")
+        #expect(engPerms == .list(["deploy", "ssh_access", "view_dashboard", "view_logs"]))
+    }
+}
+
+// MARK: - Package Registry
+
+@Suite("Real-World: Package Registry")
+struct PackageRegistryQueryTests {
+
+    typealias PackageMeta = MerkleDictionaryImpl<String>
+    typealias VersionLog = MerkleArrayImpl<String>
+    typealias Registry = MerkleDictionaryImpl<HeaderImpl<PackageMeta>>
+
+    @Test("Publish packages, query registry, update metadata via queries")
+    func testPublishAndQuery() throws {
+        let cashew = try PackageMeta()
+            .inserting(key: "name", value: "cashew")
+            .inserting(key: "version", value: "1.0.0")
+            .inserting(key: "license", value: "MIT")
+            .inserting(key: "downloads", value: "0")
+
+        let arraytrie = try PackageMeta()
+            .inserting(key: "name", value: "arraytrie")
+            .inserting(key: "version", value: "2.1.0")
+            .inserting(key: "license", value: "Apache-2.0")
+            .inserting(key: "downloads", value: "1500")
+
+        var registry = try Registry()
+            .inserting(key: "cashew", value: HeaderImpl(node: cashew))
+            .inserting(key: "arraytrie", value: HeaderImpl(node: arraytrie))
+
+        let (_, packages) = try registry.query("keys sorted")
+        #expect(packages == .list(["arraytrie", "cashew"]))
+        let (_, count) = try registry.query("count")
+        #expect(count == .count(2))
+
+        let cashewHeader = try registry.get(key: "cashew")!
+        let (updatedPkg, _) = try cashewHeader.query(
+            #"update "version" = "1.1.0" | update "downloads" = "42""#
+        )
+        registry = try registry.mutating(key: "cashew", value: updatedPkg)
+
+        let newCashewHeader = try registry.get(key: "cashew")!
+        let (_, newVersion) = try newCashewHeader.query(#"get "version""#)
+        #expect(newVersion == .value("1.1.0"))
+        let (_, newDownloads) = try newCashewHeader.query(#"get "downloads""#)
+        #expect(newDownloads == .value("42"))
+    }
+
+    @Test("Version history: append releases, paginate, verify integrity across store/resolve")
+    func testVersionHistory() async throws {
+        let store = TestStoreFetcher()
+        var versions = VersionLog()
+        let releases = ["0.1.0", "0.2.0", "0.3.0", "1.0.0", "1.0.1", "1.1.0", "2.0.0-beta"]
+        for release in releases {
+            versions = try versions.append(release)
+        }
+
+        let header = HeaderImpl(node: versions)
+        try header.storeRecursively(storer: store)
+
+        let resolved = try await HeaderImpl<VersionLog>(rawCID: header.rawCID)
+            .query("count", fetcher: store)
+        #expect(resolved.1 == .count(7))
+
+        let (_, first) = try await HeaderImpl<VersionLog>(rawCID: header.rawCID)
+            .query("first", fetcher: store)
+        #expect(first == .value("0.1.0"))
+
+        let (_, last) = try await HeaderImpl<VersionLog>(rawCID: header.rawCID)
+            .query("last", fetcher: store)
+        #expect(last == .value("2.0.0-beta"))
+
+        let (appended, _) = try await HeaderImpl<VersionLog>(rawCID: header.rawCID)
+            .query(#"append "2.0.0""#, fetcher: store)
+        #expect(appended.node!.count == 8)
+        let (_, newLast) = try appended.query("last")
+        #expect(newLast == .value("2.0.0"))
+
+        #expect(appended.rawCID != header.rawCID)
+    }
+
+    @Test("Registry with store/resolve: search and update remote packages")
+    func testRegistryStoreResolve() async throws {
+        let store = TestStoreFetcher()
+
+        let pkgA = try PackageMeta()
+            .inserting(key: "name", value: "swift-nio")
+            .inserting(key: "version", value: "2.0.0")
+            .inserting(key: "author", value: "apple")
+        let pkgB = try PackageMeta()
+            .inserting(key: "name", value: "vapor")
+            .inserting(key: "version", value: "4.0.0")
+            .inserting(key: "author", value: "vapor")
+        let pkgC = try PackageMeta()
+            .inserting(key: "name", value: "perfect")
+            .inserting(key: "version", value: "3.0.0")
+            .inserting(key: "author", value: "perfect")
+
+        let registry = try Registry()
+            .inserting(key: "swift-nio", value: HeaderImpl(node: pkgA))
+            .inserting(key: "vapor", value: HeaderImpl(node: pkgB))
+            .inserting(key: "perfect", value: HeaderImpl(node: pkgC))
+
+        let regHeader = HeaderImpl(node: registry)
+        try regHeader.storeRecursively(storer: store)
+
+        let (resolved, hasPkg) = try await HeaderImpl<Registry>(rawCID: regHeader.rawCID)
+            .query(#"contains "vapor""#, fetcher: store)
+        #expect(hasPkg == .bool(true))
+
+        let vaporHeader = try resolved.node!.get(key: "vapor")!
+        let (updatedVapor, _) = try await vaporHeader
+            .query(#"update "version" = "4.1.0""#, fetcher: store)
+
+        let updatedRegistry = try resolved.node!.mutating(key: "vapor", value: updatedVapor)
+        let newRegHeader = HeaderImpl(node: updatedRegistry)
+        try newRegHeader.storeRecursively(storer: store)
+
+        let (_, vaporVersion) = try await HeaderImpl<Registry>(rawCID: newRegHeader.rawCID)
+            .resolveRecursive(fetcher: store).node!
+            .get(key: "vapor")!.query(#"get "version""#)
+        #expect(vaporVersion == .value("4.1.0"))
+
+        let nioHeader = try await HeaderImpl<Registry>(rawCID: newRegHeader.rawCID)
+            .resolveRecursive(fetcher: store).node!
+            .get(key: "swift-nio")!
+        let origNioHeader = try registry.get(key: "swift-nio")!
+        #expect(nioHeader.rawCID == origNioHeader.rawCID)
+    }
+}
+
+// MARK: - Supply Chain Tracking
+
+@Suite("Real-World: Supply Chain Tracking")
+struct SupplyChainQueryTests {
+
+    typealias EventLog = MerkleArrayImpl<String>
+    typealias ProductTracker = MerkleDictionaryImpl<HeaderImpl<EventLog>>
+
+    @Test("Track products through supply chain stages via queries")
+    func testProductTracking() throws {
+        let appleLog = try EventLog()
+            .append("2024-01-15:harvested:farm_a")
+            .append("2024-01-16:inspected:qa_station_1")
+            .append("2024-01-17:shipped:truck_42")
+
+        let orangeLog = try EventLog()
+            .append("2024-01-10:harvested:farm_b")
+            .append("2024-01-12:inspected:qa_station_2")
+
+        var tracker = try ProductTracker()
+            .inserting(key: "apple_batch_001", value: HeaderImpl(node: appleLog))
+            .inserting(key: "orange_batch_001", value: HeaderImpl(node: orangeLog))
+
+        let (_, products) = try tracker.query("keys sorted")
+        #expect(products == .list(["apple_batch_001", "orange_batch_001"]))
+
+        let appleHeader = try tracker.get(key: "apple_batch_001")!
+        let (_, appleCount) = try appleHeader.query("count")
+        #expect(appleCount == .count(3))
+        let (_, firstEvent) = try appleHeader.query("first")
+        #expect(firstEvent == .value("2024-01-15:harvested:farm_a"))
+        let (_, lastEvent) = try appleHeader.query("last")
+        #expect(lastEvent == .value("2024-01-17:shipped:truck_42"))
+
+        let (updatedApple, _) = try appleHeader.query(#"append "2024-01-18:delivered:warehouse_7""#)
+        tracker = try tracker.mutating(key: "apple_batch_001", value: updatedApple)
+
+        let newAppleHeader = try tracker.get(key: "apple_batch_001")!
+        let (_, newCount) = try newAppleHeader.query("count")
+        #expect(newCount == .count(4))
+        let (_, delivered) = try newAppleHeader.query("last")
+        #expect(delivered == .value("2024-01-18:delivered:warehouse_7"))
+    }
+
+    @Test("Supply chain audit: store, resolve, verify full history from CID")
+    func testSupplyChainAudit() async throws {
+        let store = TestStoreFetcher()
+
+        let widget = try EventLog()
+            .append("manufactured:factory_cn")
+            .append("quality_check:pass")
+            .append("shipped:port_shanghai")
+            .append("customs:cleared")
+            .append("received:warehouse_la")
+            .append("dispatched:truck_99")
+            .append("delivered:store_42")
+
+        let gadget = try EventLog()
+            .append("manufactured:factory_de")
+            .append("quality_check:pass")
+            .append("shipped:rail_frankfurt")
+
+        let tracker = try ProductTracker()
+            .inserting(key: "widget_x100", value: HeaderImpl(node: widget))
+            .inserting(key: "gadget_z50", value: HeaderImpl(node: gadget))
+
+        let header = HeaderImpl(node: tracker)
+        try header.storeRecursively(storer: store)
+
+        let (resolved, productCount) = try await HeaderImpl<ProductTracker>(rawCID: header.rawCID)
+            .query("count", fetcher: store)
+        #expect(productCount == .count(2))
+
+        let widgetHeader = try resolved.node!.get(key: "widget_x100")!
+        let (_, widgetSteps) = try await widgetHeader.query("count", fetcher: store)
+        #expect(widgetSteps == .count(7))
+
+        let (_, origin) = try await widgetHeader.query("first", fetcher: store)
+        #expect(origin == .value("manufactured:factory_cn"))
+        let (_, destination) = try await widgetHeader.query("last", fetcher: store)
+        #expect(destination == .value("delivered:store_42"))
+
+        let (_, step3) = try await widgetHeader.query("get at 2", fetcher: store)
+        #expect(step3 == .value("shipped:port_shanghai"))
+    }
+
+    @Test("Tamper evidence: modifying a past event changes the product CID")
+    func testTamperEvidence() throws {
+        let log = try EventLog()
+            .append("manufactured:factory_a")
+            .append("inspected:pass")
+            .append("shipped:truck_1")
+
+        let original = HeaderImpl(node: log)
+        let tampered = try log.mutating(at: 1, value: "inspected:FORGED_PASS")
+        let tamperedHeader = HeaderImpl(node: tampered)
+
+        #expect(original.rawCID != tamperedHeader.rawCID)
+
+        let (_, originalInspection) = try original.query("get at 1")
+        let (_, tamperedInspection) = try tamperedHeader.query("get at 1")
+        #expect(originalInspection == .value("inspected:pass"))
+        #expect(tamperedInspection == .value("inspected:FORGED_PASS"))
+    }
+}
+
+// MARK: - Collaborative Document Versioning
+
+@Suite("Real-World: Document Versioning")
+struct DocumentVersioningQueryTests {
+
+    typealias DocMeta = MerkleDictionaryImpl<String>
+    typealias FileTree = MerkleDictionaryImpl<HeaderImpl<DocMeta>>
+
+    @Test("Git-like workflow: create tree, commit, modify, diff via CIDs")
+    func testGitLikeWorkflow() async throws {
+        let store = TestStoreFetcher()
+
+        let readme = try DocMeta()
+            .inserting(key: "content", value: "# My Project")
+            .inserting(key: "author", value: "alice")
+        let config = try DocMeta()
+            .inserting(key: "content", value: "debug=false")
+            .inserting(key: "author", value: "bob")
+
+        let tree = try FileTree()
+            .inserting(key: "README.md", value: HeaderImpl(node: readme))
+            .inserting(key: "config.yml", value: HeaderImpl(node: config))
+        let commit1 = HeaderImpl(node: tree)
+        try commit1.storeRecursively(storer: store)
+
+        let (resolved1, _) = try await commit1.query("keys sorted", fetcher: store)
+        let readmeHeader = try resolved1.node!.get(key: "README.md")!
+        let (updatedReadme, _) = try await readmeHeader.query(
+            "update \"content\" = \"# My Project - With new description\"",
+            fetcher: store
+        )
+        let tree2 = try resolved1.node!.mutating(key: "README.md", value: updatedReadme)
+        let commit2 = HeaderImpl(node: tree2)
+        try commit2.storeRecursively(storer: store)
+
+        let configCID1 = try tree.get(key: "config.yml")!.rawCID
+        let configCID2 = try tree2.get(key: "config.yml")!.rawCID
+        #expect(configCID1 == configCID2)
+
+        let readmeCID1 = try tree.get(key: "README.md")!.rawCID
+        let readmeCID2 = try tree2.get(key: "README.md")!.rawCID
+        #expect(readmeCID1 != readmeCID2)
+
+        #expect(commit1.rawCID != commit2.rawCID)
+
+        let (_, resolvedContent) = try await HeaderImpl<FileTree>(rawCID: commit2.rawCID)
+            .resolveRecursive(fetcher: store).node!
+            .get(key: "README.md")!
+            .query(#"get "content""#)
+        #expect(resolvedContent == .value("# My Project - With new description"))
+    }
+
+    @Test("Branch and merge: two independent edits from same base")
+    func testBranchAndMerge() throws {
+        let base = try DocMeta()
+            .inserting(key: "title", value: "Draft")
+            .inserting(key: "body", value: "initial content")
+            .inserting(key: "status", value: "draft")
+
+        let tree = try FileTree()
+            .inserting(key: "doc.md", value: HeaderImpl(node: base))
+
+        let docHeader = try tree.get(key: "doc.md")!
+        let (branchA, _) = try docHeader.query(#"update "title" = "Final Title""#)
+        let (branchB, _) = try docHeader.query(#"update "status" = "review""#)
+
+        let treeA = try tree.mutating(key: "doc.md", value: branchA)
+        let treeB = try tree.mutating(key: "doc.md", value: branchB)
+
+        #expect(HeaderImpl(node: treeA).rawCID != HeaderImpl(node: treeB).rawCID)
+
+        let mergedDoc = try base
+            .mutating(key: "title", value: "Final Title")
+            .mutating(key: "status", value: "review")
+        let mergedTree = try tree.mutating(key: "doc.md", value: HeaderImpl(node: mergedDoc))
+
+        let (_, mergedTitle) = try mergedTree.get(key: "doc.md")!.query(#"get "title""#)
+        let (_, mergedStatus) = try mergedTree.get(key: "doc.md")!.query(#"get "status""#)
+        let (_, mergedBody) = try mergedTree.get(key: "doc.md")!.query(#"get "body""#)
+        #expect(mergedTitle == .value("Final Title"))
+        #expect(mergedStatus == .value("review"))
+        #expect(mergedBody == .value("initial content"))
+    }
+
+    @Test("File tree operations: add, rename (delete+insert), list sorted")
+    func testFileTreeOperations() throws {
+        var tree = try FileTree()
+            .inserting(key: "src/main.swift", value: HeaderImpl(node:
+                try DocMeta().inserting(key: "content", value: "import Foundation")))
+            .inserting(key: "src/utils.swift", value: HeaderImpl(node:
+                try DocMeta().inserting(key: "content", value: "func helper() {}")))
+            .inserting(key: "tests/test.swift", value: HeaderImpl(node:
+                try DocMeta().inserting(key: "content", value: "import XCTest")))
+
+        let (_, files) = try tree.query("keys sorted")
+        #expect(files == .list(["src/main.swift", "src/utils.swift", "tests/test.swift"]))
+
+        let utilsHeader = try tree.get(key: "src/utils.swift")!
+        let (tree2, _) = try tree.query(#"delete "src/utils.swift""#)
+        tree = try tree2.inserting(key: "src/helpers.swift", value: utilsHeader)
+
+        let (_, renamedFiles) = try tree.query("keys sorted")
+        #expect(renamedFiles == .list(["src/helpers.swift", "src/main.swift", "tests/test.swift"]))
+
+        let helpersContent = try tree.get(key: "src/helpers.swift")!
+        let (_, content) = try helpersContent.query(#"get "content""#)
+        #expect(content == .value("func helper() {}"))
     }
 }
