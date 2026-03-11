@@ -3,7 +3,7 @@ import Foundation
 import Multicodec
 import CollectionConcurrencyKit
 
-public protocol Node: Codable, LosslessStringConvertible, Sendable {
+public protocol Node: CashewQueryable, Codable, LosslessStringConvertible, Sendable {
     typealias PathSegment = String
 
     // traversal

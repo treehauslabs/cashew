@@ -1403,3 +1403,731 @@ struct DocumentVersioningQueryTests {
         #expect(content == .value("func helper() {}"))
     }
 }
+
+// MARK: - Custom Node Types
+
+struct NFTMetadata: Scalar {
+    let name: String
+    let rarity: String
+    let creator: String
+    let edition: Int
+}
+
+struct SensorReading: Scalar {
+    let temperature: Double
+    let humidity: Double
+    let timestamp: Int
+    let sensorId: String
+}
+
+struct BondInstrument: Scalar {
+    let cusip: String
+    let couponRate: Double
+    let maturityYear: Int
+    let faceValue: Int
+    let issuer: String
+}
+
+// MARK: - NFT Marketplace with Custom Nodes
+
+@Suite("Real-World: NFT Marketplace (Custom Nodes)")
+struct NFTMarketplaceQueryTests {
+
+    typealias Collection = MerkleDictionaryImpl<HeaderImpl<NFTMetadata>>
+    typealias Marketplace = MerkleDictionaryImpl<HeaderImpl<Collection>>
+
+    @Test("Mint NFTs into collections, query marketplace, verify content-addressed uniqueness")
+    func testMintAndQueryMarketplace() throws {
+        let punk1 = NFTMetadata(name: "Punk #1", rarity: "legendary", creator: "larvalabs", edition: 1)
+        let punk2 = NFTMetadata(name: "Punk #2", rarity: "common", creator: "larvalabs", edition: 2)
+        let punk3 = NFTMetadata(name: "Punk #3", rarity: "rare", creator: "larvalabs", edition: 3)
+
+        let ape1 = NFTMetadata(name: "Ape #1", rarity: "epic", creator: "yuga", edition: 1)
+        let ape2 = NFTMetadata(name: "Ape #2", rarity: "common", creator: "yuga", edition: 2)
+
+        let punks = try Collection()
+            .inserting(key: "punk_001", value: HeaderImpl(node: punk1))
+            .inserting(key: "punk_002", value: HeaderImpl(node: punk2))
+            .inserting(key: "punk_003", value: HeaderImpl(node: punk3))
+
+        let apes = try Collection()
+            .inserting(key: "ape_001", value: HeaderImpl(node: ape1))
+            .inserting(key: "ape_002", value: HeaderImpl(node: ape2))
+
+        let marketplace = try Marketplace()
+            .inserting(key: "cryptopunks", value: HeaderImpl(node: punks))
+            .inserting(key: "boredapes", value: HeaderImpl(node: apes))
+
+        let (_, collections) = try marketplace.query("keys sorted")
+        #expect(collections == .list(["boredapes", "cryptopunks"]))
+
+        let (_, marketCount) = try marketplace.query("count")
+        #expect(marketCount == .count(2))
+
+        let (_, hasPunks) = try marketplace.query(#"contains "cryptopunks""#)
+        #expect(hasPunks == .bool(true))
+
+        let punkCollection = try marketplace.get(key: "cryptopunks")!
+        let (_, punkCount) = try punkCollection.query("count")
+        #expect(punkCount == .count(3))
+
+        let (_, punkIds) = try punkCollection.query("keys sorted")
+        #expect(punkIds == .list(["punk_001", "punk_002", "punk_003"]))
+
+        let punk1Header = try punks.get(key: "punk_001")!
+        let punk1Duplicate = HeaderImpl(node: NFTMetadata(name: "Punk #1", rarity: "legendary", creator: "larvalabs", edition: 1))
+        #expect(punk1Header.rawCID == punk1Duplicate.rawCID)
+
+        let punk1Fake = HeaderImpl(node: NFTMetadata(name: "Punk #1", rarity: "legendary", creator: "forger", edition: 1))
+        #expect(punk1Header.rawCID != punk1Fake.rawCID)
+    }
+
+    @Test("Transfer NFT between collections, verify structural sharing via CIDs")
+    func testTransferNFT() throws {
+        let art1 = NFTMetadata(name: "Starry Night #7", rarity: "legendary", creator: "artblocks", edition: 7)
+        let art2 = NFTMetadata(name: "Chromie #42", rarity: "rare", creator: "artblocks", edition: 42)
+
+        let aliceCollection = try Collection()
+            .inserting(key: "starry_7", value: HeaderImpl(node: art1))
+            .inserting(key: "chromie_42", value: HeaderImpl(node: art2))
+
+        let bobCollection = Collection()
+
+        let marketplace = try Marketplace()
+            .inserting(key: "alice", value: HeaderImpl(node: aliceCollection))
+            .inserting(key: "bob", value: HeaderImpl(node: bobCollection))
+
+        let transferredItem = try aliceCollection.get(key: "chromie_42")!
+        let newAlice = try aliceCollection.deleting(key: "chromie_42")
+        let newBob = try bobCollection.inserting(key: "chromie_42", value: transferredItem)
+
+        let newMarketplace = try marketplace
+            .mutating(key: "alice", value: HeaderImpl(node: newAlice))
+            .mutating(key: "bob", value: HeaderImpl(node: newBob))
+
+        let (_, aliceCount) = try HeaderImpl(node: newAlice).query("count")
+        #expect(aliceCount == .count(1))
+
+        let (_, bobItems) = try HeaderImpl(node: newBob).query("keys sorted")
+        #expect(bobItems == .list(["chromie_42"]))
+
+        let originalStarry = try aliceCollection.get(key: "starry_7")!
+        let postTransferStarry = try newAlice.get(key: "starry_7")!
+        #expect(originalStarry.rawCID == postTransferStarry.rawCID)
+
+        #expect(HeaderImpl(node: marketplace).rawCID != HeaderImpl(node: newMarketplace).rawCID)
+    }
+
+    @Test("Store marketplace to CID, resolve, query across nesting levels")
+    func testStoreResolveQuery() async throws {
+        let store = TestStoreFetcher()
+
+        let nft = NFTMetadata(name: "Genesis", rarity: "mythic", creator: "satoshi", edition: 0)
+        let collection = try Collection()
+            .inserting(key: "genesis_0", value: HeaderImpl(node: nft))
+
+        let marketplace = try Marketplace()
+            .inserting(key: "founders", value: HeaderImpl(node: collection))
+
+        let root = HeaderImpl(node: marketplace)
+        try root.storeRecursively(storer: store)
+
+        let (resolved, hasFounders) = try await HeaderImpl<Marketplace>(rawCID: root.rawCID)
+            .query(#"contains "founders""#, fetcher: store)
+        #expect(hasFounders == .bool(true))
+
+        let foundersHeader = try resolved.node!.get(key: "founders")!
+        let (resolvedFounders, _) = try await foundersHeader.query("count", fetcher: store)
+        let (_, genesisCount) = try resolvedFounders.query("count")
+        #expect(genesisCount == .count(1))
+    }
+}
+
+// MARK: - IoT Sensor Network with Custom Nodes
+
+@Suite("Real-World: IoT Sensor Network (Custom Nodes)")
+struct IoTSensorQueryTests {
+
+    typealias TimeSeries = MerkleArrayImpl<HeaderImpl<SensorReading>>
+    typealias DeviceRegistry = MerkleDictionaryImpl<HeaderImpl<TimeSeries>>
+
+    @Test("Ingest sensor data, query device registry, paginate time series")
+    func testSensorIngestion() throws {
+        let readings = [
+            SensorReading(temperature: 22.5, humidity: 45.0, timestamp: 1700000000, sensorId: "temp_01"),
+            SensorReading(temperature: 23.1, humidity: 44.2, timestamp: 1700000060, sensorId: "temp_01"),
+            SensorReading(temperature: 23.8, humidity: 43.5, timestamp: 1700000120, sensorId: "temp_01"),
+            SensorReading(temperature: 24.2, humidity: 42.8, timestamp: 1700000180, sensorId: "temp_01"),
+            SensorReading(temperature: 24.0, humidity: 43.0, timestamp: 1700000240, sensorId: "temp_01"),
+        ]
+
+        var series = TimeSeries()
+        for reading in readings {
+            series = try series.append(HeaderImpl(node: reading))
+        }
+
+        let outdoorReadings = [
+            SensorReading(temperature: 5.2, humidity: 78.0, timestamp: 1700000000, sensorId: "outdoor_01"),
+            SensorReading(temperature: 4.8, humidity: 80.1, timestamp: 1700000060, sensorId: "outdoor_01"),
+        ]
+
+        var outdoorSeries = TimeSeries()
+        for reading in outdoorReadings {
+            outdoorSeries = try outdoorSeries.append(HeaderImpl(node: reading))
+        }
+
+        let registry = try DeviceRegistry()
+            .inserting(key: "building_a/floor_2/temp_01", value: HeaderImpl(node: series))
+            .inserting(key: "building_a/outdoor/outdoor_01", value: HeaderImpl(node: outdoorSeries))
+
+        let (_, deviceCount) = try registry.query("count")
+        #expect(deviceCount == .count(2))
+
+        let (_, devices) = try registry.query("keys sorted")
+        #expect(devices == .list(["building_a/floor_2/temp_01", "building_a/outdoor/outdoor_01"]))
+
+        let tempSensor = try registry.get(key: "building_a/floor_2/temp_01")!
+        let (_, readingCount) = try tempSensor.query("count")
+        #expect(readingCount == .count(5))
+
+        let (_, firstReading) = try tempSensor.query("first")
+        #expect(firstReading != .value(nil))
+
+        let (_, lastReading) = try tempSensor.query("last")
+        #expect(lastReading != .value(nil))
+    }
+
+    @Test("Detect tampered sensor reading via CID mismatch")
+    func testTamperDetection() throws {
+        let legitimate = SensorReading(temperature: 22.5, humidity: 45.0, timestamp: 1700000000, sensorId: "temp_01")
+        let tampered = SensorReading(temperature: 99.9, humidity: 45.0, timestamp: 1700000000, sensorId: "temp_01")
+
+        let legitimateHeader = HeaderImpl(node: legitimate)
+        let tamperedHeader = HeaderImpl(node: tampered)
+        #expect(legitimateHeader.rawCID != tamperedHeader.rawCID)
+
+        var series = TimeSeries()
+        series = try series.append(legitimateHeader)
+        let originalCID = HeaderImpl(node: series).rawCID
+
+        var tamperedSeries = TimeSeries()
+        tamperedSeries = try tamperedSeries.append(tamperedHeader)
+        let tamperedCID = HeaderImpl(node: tamperedSeries).rawCID
+
+        #expect(originalCID != tamperedCID)
+    }
+
+    @Test("Store device registry, resolve from CID, query nested custom nodes")
+    func testStoreResolveNestedCustom() async throws {
+        let store = TestStoreFetcher()
+
+        let r1 = SensorReading(temperature: 20.0, humidity: 50.0, timestamp: 1700000000, sensorId: "s1")
+        let r2 = SensorReading(temperature: 21.0, humidity: 49.0, timestamp: 1700000060, sensorId: "s1")
+
+        var series = TimeSeries()
+        series = try series.append(HeaderImpl(node: r1))
+        series = try series.append(HeaderImpl(node: r2))
+
+        let registry = try DeviceRegistry()
+            .inserting(key: "sensor_1", value: HeaderImpl(node: series))
+
+        let root = HeaderImpl(node: registry)
+        try root.storeRecursively(storer: store)
+
+        let (resolved, count) = try await HeaderImpl<DeviceRegistry>(rawCID: root.rawCID)
+            .query("count", fetcher: store)
+        #expect(count == .count(1))
+
+        let sensorHeader = try resolved.node!.get(key: "sensor_1")!
+        let (resolvedSensor, seriesCount) = try await sensorHeader.query("count", fetcher: store)
+        #expect(seriesCount == .count(2))
+
+        let (_, first) = try resolvedSensor.query("first")
+        #expect(first != .value(nil))
+    }
+}
+
+// MARK: - Fixed Income Portfolio with Custom Nodes
+
+@Suite("Real-World: Bond Portfolio (Custom Nodes)")
+struct BondPortfolioQueryTests {
+
+    typealias Holdings = MerkleDictionaryImpl<HeaderImpl<BondInstrument>>
+    typealias AccountBook = MerkleDictionaryImpl<HeaderImpl<Holdings>>
+
+    @Test("Build multi-account bond portfolio, query holdings across accounts")
+    func testPortfolioConstruction() throws {
+        let treasury10y = BondInstrument(cusip: "912828ZT6", couponRate: 3.5, maturityYear: 2033, faceValue: 1000, issuer: "US Treasury")
+        let treasury30y = BondInstrument(cusip: "912810SV1", couponRate: 4.0, maturityYear: 2053, faceValue: 1000, issuer: "US Treasury")
+        let apple2028 = BondInstrument(cusip: "037833DX5", couponRate: 2.65, maturityYear: 2028, faceValue: 1000, issuer: "Apple Inc")
+        let msft2030 = BondInstrument(cusip: "594918BW3", couponRate: 2.4, maturityYear: 2030, faceValue: 1000, issuer: "Microsoft")
+
+        let pensionFund = try Holdings()
+            .inserting(key: "912828ZT6", value: HeaderImpl(node: treasury10y))
+            .inserting(key: "912810SV1", value: HeaderImpl(node: treasury30y))
+            .inserting(key: "037833DX5", value: HeaderImpl(node: apple2028))
+
+        let hedgeFund = try Holdings()
+            .inserting(key: "037833DX5", value: HeaderImpl(node: apple2028))
+            .inserting(key: "594918BW3", value: HeaderImpl(node: msft2030))
+
+        let book = try AccountBook()
+            .inserting(key: "pension_fund_a", value: HeaderImpl(node: pensionFund))
+            .inserting(key: "hedge_fund_x", value: HeaderImpl(node: hedgeFund))
+
+        let (_, accounts) = try book.query("keys sorted")
+        #expect(accounts == .list(["hedge_fund_x", "pension_fund_a"]))
+
+        let (_, accountCount) = try book.query("count")
+        #expect(accountCount == .count(2))
+
+        let pensionHeader = try book.get(key: "pension_fund_a")!
+        let (_, pensionCount) = try pensionHeader.query("count")
+        #expect(pensionCount == .count(3))
+
+        let (_, pensionBonds) = try pensionHeader.query("keys sorted")
+        #expect(pensionBonds == .list(["037833DX5", "912810SV1", "912828ZT6"]))
+
+        let hedgeHeader = try book.get(key: "hedge_fund_x")!
+        let (_, hasApple) = try hedgeHeader.query(#"contains "037833DX5""#)
+        #expect(hasApple == .bool(true))
+
+        let pensionApple = try pensionFund.get(key: "037833DX5")!
+        let hedgeApple = try hedgeFund.get(key: "037833DX5")!
+        #expect(pensionApple.rawCID == hedgeApple.rawCID)
+    }
+
+    @Test("Rebalance portfolio: move bond between accounts, verify structural sharing")
+    func testRebalance() throws {
+        let bond = BondInstrument(cusip: "912828ZT6", couponRate: 3.5, maturityYear: 2033, faceValue: 1000, issuer: "US Treasury")
+        let other = BondInstrument(cusip: "594918BW3", couponRate: 2.4, maturityYear: 2030, faceValue: 1000, issuer: "Microsoft")
+
+        let accountA = try Holdings()
+            .inserting(key: "912828ZT6", value: HeaderImpl(node: bond))
+            .inserting(key: "594918BW3", value: HeaderImpl(node: other))
+        let accountB = Holdings()
+
+        let book = try AccountBook()
+            .inserting(key: "account_a", value: HeaderImpl(node: accountA))
+            .inserting(key: "account_b", value: HeaderImpl(node: accountB))
+
+        let bookCID = HeaderImpl(node: book).rawCID
+
+        let movedBond = try accountA.get(key: "912828ZT6")!
+        let newAccountA = try accountA.deleting(key: "912828ZT6")
+        let newAccountB = try accountB.inserting(key: "912828ZT6", value: movedBond)
+
+        let newBook = try book
+            .mutating(key: "account_a", value: HeaderImpl(node: newAccountA))
+            .mutating(key: "account_b", value: HeaderImpl(node: newAccountB))
+
+        let newBookCID = HeaderImpl(node: newBook).rawCID
+        #expect(bookCID != newBookCID)
+
+        let (_, aCount) = try HeaderImpl(node: newAccountA).query("count")
+        #expect(aCount == .count(1))
+
+        let (_, bBonds) = try HeaderImpl(node: newAccountB).query("keys sorted")
+        #expect(bBonds == .list(["912828ZT6"]))
+
+        let originalOther = try accountA.get(key: "594918BW3")!
+        let postMoveOther = try newAccountA.get(key: "594918BW3")!
+        #expect(originalOther.rawCID == postMoveOther.rawCID)
+    }
+
+    @Test("Store portfolio to CID, resolve, query across three nesting levels")
+    func testStoreResolveThreeLevels() async throws {
+        let store = TestStoreFetcher()
+
+        let bond = BondInstrument(cusip: "912828ZT6", couponRate: 3.5, maturityYear: 2033, faceValue: 1000, issuer: "US Treasury")
+        let holdings = try Holdings()
+            .inserting(key: "912828ZT6", value: HeaderImpl(node: bond))
+
+        let book = try AccountBook()
+            .inserting(key: "sovereign_fund", value: HeaderImpl(node: holdings))
+
+        let root = HeaderImpl(node: book)
+        try root.storeRecursively(storer: store)
+
+        let (resolved, hasFund) = try await HeaderImpl<AccountBook>(rawCID: root.rawCID)
+            .query(#"contains "sovereign_fund""#, fetcher: store)
+        #expect(hasFund == .bool(true))
+
+        let fundHeader = try resolved.node!.get(key: "sovereign_fund")!
+        let (resolvedFund, bondCount) = try await fundHeader.query("count", fetcher: store)
+        #expect(bondCount == .count(1))
+
+        let (_, hasBond) = try resolvedFund.query(#"contains "912828ZT6""#)
+        #expect(hasBond == .bool(true))
+
+        let bondHeader = try resolvedFund.node!.get(key: "912828ZT6")!
+        #expect(bondHeader.rawCID == HeaderImpl(node: bond).rawCID)
+    }
+}
+
+// MARK: - Custom Node Default Query Behavior
+
+@Suite("Real-World: Custom Node Query Defaults")
+struct CustomNodeQueryDefaultsTests {
+
+    @Test("Scalar node returns correct defaults from Node query methods")
+    func testScalarQueryDefaults() throws {
+        let sensor = SensorReading(temperature: 22.5, humidity: 45.0, timestamp: 1700000000, sensorId: "temp_01")
+
+        let (_, count) = try sensor.query("count")
+        #expect(count == .count(0))
+
+        let (_, keys) = try sensor.query("keys")
+        #expect(keys == .list([]))
+
+        let (_, sorted) = try sensor.query("keys sorted")
+        #expect(sorted == .list([]))
+
+        let (_, contains) = try sensor.query(#"contains "anything""#)
+        #expect(contains == .bool(false))
+    }
+
+    @Test("Custom node CID is deterministic and content-dependent")
+    func testCustomNodeContentAddressing() {
+        let a = HeaderImpl(node: BondInstrument(cusip: "X", couponRate: 3.5, maturityYear: 2033, faceValue: 1000, issuer: "Treasury"))
+        let b = HeaderImpl(node: BondInstrument(cusip: "X", couponRate: 3.5, maturityYear: 2033, faceValue: 1000, issuer: "Treasury"))
+        let c = HeaderImpl(node: BondInstrument(cusip: "Y", couponRate: 3.5, maturityYear: 2033, faceValue: 1000, issuer: "Treasury"))
+
+        #expect(a.rawCID == b.rawCID)
+        #expect(a.rawCID != c.rawCID)
+    }
+
+    @Test("MerkleSet of custom node CIDs: deduplicated ownership registry")
+    func testSetOfCustomNodeCIDs() throws {
+        let nft1 = HeaderImpl(node: NFTMetadata(name: "Alpha", rarity: "rare", creator: "artist_a", edition: 1))
+        let nft2 = HeaderImpl(node: NFTMetadata(name: "Beta", rarity: "common", creator: "artist_b", edition: 1))
+        let nft3 = HeaderImpl(node: NFTMetadata(name: "Gamma", rarity: "epic", creator: "artist_a", edition: 1))
+
+        var ownership = try MerkleSetImpl()
+            .insert(nft1.rawCID)
+            .insert(nft2.rawCID)
+            .insert(nft3.rawCID)
+
+        let (_, count) = try ownership.query("count")
+        #expect(count == .count(3))
+
+        let (_, ownsNft1) = try ownership.query("contains \"\(nft1.rawCID)\"")
+        #expect(ownsNft1 == .bool(true))
+
+        ownership = try ownership.remove(nft2.rawCID)
+        let (_, newCount) = try ownership.query("count")
+        #expect(newCount == .count(2))
+
+        let (_, stillOwnsNft1) = try ownership.query("contains \"\(nft1.rawCID)\"")
+        #expect(stillOwnsNft1 == .bool(true))
+
+        let (_, ownsNft2) = try ownership.query("contains \"\(nft2.rawCID)\"")
+        #expect(ownsNft2 == .bool(false))
+    }
+
+    @Test("Mixed nesting: MerkleArray of custom nodes inside MerkleDictionary with MerkleSet index")
+    func testMixedNesting() throws {
+        typealias SensorLog = MerkleArrayImpl<HeaderImpl<SensorReading>>
+        typealias AlertSet = MerkleSetImpl
+        typealias FloorMonitor = MerkleDictionaryImpl<HeaderImpl<SensorLog>>
+
+        let highTemp = SensorReading(temperature: 85.0, humidity: 20.0, timestamp: 1700000000, sensorId: "s1")
+        let normalTemp = SensorReading(temperature: 22.0, humidity: 45.0, timestamp: 1700000060, sensorId: "s1")
+
+        var sensorLog = SensorLog()
+        sensorLog = try sensorLog.append(HeaderImpl(node: highTemp))
+        sensorLog = try sensorLog.append(HeaderImpl(node: normalTemp))
+
+        let floor = try FloorMonitor()
+            .inserting(key: "zone_a/sensor_1", value: HeaderImpl(node: sensorLog))
+
+        let alerts = try AlertSet()
+            .insert("zone_a/sensor_1")
+
+        let (_, floorDevices) = try floor.query("keys sorted")
+        #expect(floorDevices == .list(["zone_a/sensor_1"]))
+
+        let (_, alertCount) = try alerts.query("count")
+        #expect(alertCount == .count(1))
+
+        let (_, isAlerting) = try alerts.query(#"contains "zone_a/sensor_1""#)
+        #expect(isAlerting == .bool(true))
+
+        let sensorHeader = try floor.get(key: "zone_a/sensor_1")!
+        let (_, readingCount) = try sensorHeader.query("count")
+        #expect(readingCount == .count(2))
+
+        let (_, firstReading) = try sensorHeader.query("first")
+        #expect(firstReading != .value(nil))
+    }
+}
+
+// MARK: - Custom Node with Children (Org Chart)
+
+typealias Department = MerkleDictionaryImpl<String>
+typealias AuditLog = MerkleArrayImpl<String>
+
+struct OrgUnit: Node {
+    typealias PathSegment = String
+
+    let team: HeaderImpl<Department>
+    let history: HeaderImpl<AuditLog>
+
+    init(team: HeaderImpl<Department>, history: HeaderImpl<AuditLog>) {
+        self.team = team
+        self.history = history
+    }
+
+    func get(property: PathSegment) -> (any Address)? {
+        switch property {
+        case "team": return team
+        case "history": return history
+        default: return nil
+        }
+    }
+
+    func properties() -> Set<PathSegment> {
+        return ["team", "history"]
+    }
+
+    func set(properties: [PathSegment: any Address]) -> Self {
+        return OrgUnit(
+            team: (properties["team"] as? HeaderImpl<Department>) ?? team,
+            history: (properties["history"] as? HeaderImpl<AuditLog>) ?? history
+        )
+    }
+}
+
+@Suite("Real-World: Custom Node with Nested MerkleDictionary (Org Chart)")
+struct OrgChartQueryTests {
+
+    typealias OrgRegistry = MerkleDictionaryImpl<HeaderImpl<OrgUnit>>
+
+    private func makeOrgUnit(members: [(String, String)], events: [String]) throws -> OrgUnit {
+        var dept = Department()
+        for (name, role) in members {
+            dept = try dept.inserting(key: name, value: role)
+        }
+        var log = AuditLog()
+        for event in events {
+            log = try log.append(event)
+        }
+        return OrgUnit(team: HeaderImpl(node: dept), history: HeaderImpl(node: log))
+    }
+
+    @Test("Query custom node properties via default Node evaluate")
+    func testCustomNodeDefaultQuery() throws {
+        let unit = try makeOrgUnit(
+            members: [("alice", "lead"), ("bob", "engineer")],
+            events: ["created", "alice_promoted"]
+        )
+
+        let (_, count) = try unit.query("count")
+        #expect(count == .count(2))
+
+        let (_, keys) = try unit.query("keys sorted")
+        #expect(keys == .list(["history", "team"]))
+
+        let (_, hasTeam) = try unit.query(#"contains "team""#)
+        #expect(hasTeam == .bool(true))
+
+        let (_, hasPayroll) = try unit.query(#"contains "payroll""#)
+        #expect(hasPayroll == .bool(false))
+    }
+
+    @Test("Query nested MerkleDictionary through custom node's children")
+    func testQueryNestedDictThroughCustom() throws {
+        let unit = try makeOrgUnit(
+            members: [("alice", "lead"), ("bob", "engineer"), ("charlie", "designer")],
+            events: ["unit_formed"]
+        )
+
+        let (_, teamCount) = try unit.team.query("count")
+        #expect(teamCount == .count(3))
+
+        let (_, teamMembers) = try unit.team.query("keys sorted")
+        #expect(teamMembers == .list(["alice", "bob", "charlie"]))
+
+        let (_, aliceRole) = try unit.team.query(#"get "alice""#)
+        #expect(aliceRole == .value("lead"))
+
+        let (_, historyCount) = try unit.history.query("count")
+        #expect(historyCount == .count(1))
+
+        let (_, firstEvent) = try unit.history.query("first")
+        #expect(firstEvent == .value("unit_formed"))
+    }
+
+    @Test("Transform flows through custom node to nested MerkleDictionary")
+    func testTransformThroughCustomNode() throws {
+        let unit = try makeOrgUnit(
+            members: [("alice", "engineer"), ("bob", "engineer")],
+            events: ["created"]
+        )
+
+        var trie = ArrayTrie<Transform>()
+        trie.set(["team", "alice"], value: .update("lead"))
+        let transformed = try unit.transform(transforms: trie)!
+
+        let (_, aliceRole) = try transformed.team.query(#"get "alice""#)
+        #expect(aliceRole == .value("lead"))
+
+        let (_, bobRole) = try transformed.team.query(#"get "bob""#)
+        #expect(bobRole == .value("engineer"))
+    }
+
+    @Test("Transform adds new member to nested team via custom node")
+    func testTransformInsertThroughCustomNode() throws {
+        let unit = try makeOrgUnit(
+            members: [("alice", "lead")],
+            events: ["created"]
+        )
+
+        var trie = ArrayTrie<Transform>()
+        trie.set(["team", "dave"], value: .insert("intern"))
+        let transformed = try unit.transform(transforms: trie)!
+
+        let (_, count) = try transformed.team.query("count")
+        #expect(count == .count(2))
+
+        let (_, daveRole) = try transformed.team.query(#"get "dave""#)
+        #expect(daveRole == .value("intern"))
+    }
+
+    @Test("Transform deletes member from nested team via custom node")
+    func testTransformDeleteThroughCustomNode() throws {
+        let unit = try makeOrgUnit(
+            members: [("alice", "lead"), ("bob", "engineer"), ("charlie", "designer")],
+            events: ["created"]
+        )
+
+        var trie = ArrayTrie<Transform>()
+        trie.set(["team", "bob"], value: .delete)
+        let transformed = try unit.transform(transforms: trie)!
+
+        let (_, count) = try transformed.team.query("count")
+        #expect(count == .count(2))
+
+        let (_, hasBob) = try transformed.team.query(#"contains "bob""#)
+        #expect(hasBob == .bool(false))
+
+        let (_, hasAlice) = try transformed.team.query(#"contains "alice""#)
+        #expect(hasAlice == .bool(true))
+    }
+
+    @Test("Custom node inside MerkleDictionary: full org registry lifecycle")
+    func testOrgRegistryLifecycle() throws {
+        let engineering = try makeOrgUnit(
+            members: [("alice", "vp"), ("bob", "staff"), ("charlie", "senior")],
+            events: ["dept_created", "alice_hired", "bob_hired", "charlie_hired"]
+        )
+        let marketing = try makeOrgUnit(
+            members: [("eve", "director"), ("frank", "manager")],
+            events: ["dept_created", "eve_hired", "frank_hired"]
+        )
+
+        let org = try OrgRegistry()
+            .inserting(key: "engineering", value: HeaderImpl(node: engineering))
+            .inserting(key: "marketing", value: HeaderImpl(node: marketing))
+
+        let (_, deptCount) = try org.query("count")
+        #expect(deptCount == .count(2))
+
+        let (_, depts) = try org.query("keys sorted")
+        #expect(depts == .list(["engineering", "marketing"]))
+
+        let engHeader = try org.get(key: "engineering")!
+        let (_, engProps) = try engHeader.query("keys sorted")
+        #expect(engProps == .list(["history", "team"]))
+
+        let (_, engTeamCount) = try engHeader.node!.team.query("count")
+        #expect(engTeamCount == .count(3))
+
+        let (_, engMembers) = try engHeader.node!.team.query("keys sorted")
+        #expect(engMembers == .list(["alice", "bob", "charlie"]))
+
+        let (_, engHistoryCount) = try engHeader.node!.history.query("count")
+        #expect(engHistoryCount == .count(4))
+
+        let (_, firstEvent) = try engHeader.node!.history.query("first")
+        #expect(firstEvent == .value("dept_created"))
+    }
+
+    @Test("Transform nested team inside org registry via outer MerkleDictionary")
+    func testTransformThroughOrgRegistry() throws {
+        let unit = try makeOrgUnit(
+            members: [("alice", "engineer")],
+            events: ["created"]
+        )
+        let org = try OrgRegistry()
+            .inserting(key: "platform", value: HeaderImpl(node: unit))
+
+        var trie = ArrayTrie<Transform>()
+        trie.set(["platform", "team", "alice"], value: .update("staff_engineer"))
+        let newOrg = try org.transform(transforms: trie)!
+
+        let platformHeader = try newOrg.get(key: "platform")!
+        let (_, role) = try platformHeader.node!.team.query(#"get "alice""#)
+        #expect(role == .value("staff_engineer"))
+    }
+
+    @Test("Store custom node org to CID, resolve, query all levels")
+    func testStoreResolveCustomNodeOrg() async throws {
+        let store = TestStoreFetcher()
+
+        let unit = try makeOrgUnit(
+            members: [("alice", "cto"), ("bob", "vp_eng")],
+            events: ["founded", "series_a", "bob_joined"]
+        )
+        let org = try OrgRegistry()
+            .inserting(key: "leadership", value: HeaderImpl(node: unit))
+
+        let root = HeaderImpl(node: org)
+        try root.storeRecursively(storer: store)
+
+        let (resolved, hasLeadership) = try await HeaderImpl<OrgRegistry>(rawCID: root.rawCID)
+            .query(#"contains "leadership""#, fetcher: store)
+        #expect(hasLeadership == .bool(true))
+
+        let leaderHeader = try resolved.node!.get(key: "leadership")!
+        let resolvedLeader = try await leaderHeader.resolve(fetcher: store)
+        let resolvedUnit = resolvedLeader.node!
+
+        let resolvedTeam = try await resolvedUnit.team.query("count", fetcher: store)
+        #expect(resolvedTeam.1 == .count(2))
+
+        let (_, aliceRole) = try resolvedTeam.0.query(#"get "alice""#)
+        #expect(aliceRole == .value("cto"))
+
+        let resolvedHistory = try await resolvedUnit.history.query("count", fetcher: store)
+        #expect(resolvedHistory.1 == .count(3))
+
+        let (_, lastEvent) = try resolvedHistory.0.query("last")
+        #expect(lastEvent == .value("bob_joined"))
+    }
+
+    @Test("CID changes propagate through custom node to org registry root")
+    func testCIDPropagation() throws {
+        let unit = try makeOrgUnit(
+            members: [("alice", "lead")],
+            events: ["created"]
+        )
+        let org = try OrgRegistry()
+            .inserting(key: "team_x", value: HeaderImpl(node: unit))
+        let originalCID = HeaderImpl(node: org).rawCID
+
+        var trie = ArrayTrie<Transform>()
+        trie.set(["team_x", "team", "alice"], value: .update("director"))
+        let newOrg = try org.transform(transforms: trie)!
+        let newCID = HeaderImpl(node: newOrg).rawCID
+
+        #expect(originalCID != newCID)
+
+        let originalUnit = try org.get(key: "team_x")!
+        let newUnit = try newOrg.get(key: "team_x")!
+        #expect(originalUnit.rawCID != newUnit.rawCID)
+
+        #expect(originalUnit.node!.history.rawCID == newUnit.node!.history.rawCID)
+        #expect(originalUnit.node!.team.rawCID != newUnit.node!.team.rawCID)
+    }
+}

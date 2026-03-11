@@ -43,26 +43,19 @@ public extension Header {
     static var defaultCodec: Codecs { .dag_json }
 
     static func create(node: NodeType, codec: Codecs = defaultCodec) async throws -> Self {
-        let cid = try await createCID(for: node, codec: codec)
+        let cid = try computeCID(for: node, codec: codec)
         return Self(rawCID: cid, node: node, encryptionInfo: nil)
     }
 
-    private static func createCID(for node: NodeType, codec: Codecs) async throws -> String {
-        let data = try serializeNode(node, codec: codec)
+    private static func computeCID(for node: NodeType, codec: Codecs) throws -> String {
+        guard let data = node.toData() else { throw DataErrors.serializationFailed }
         let multihash = try Multihash(raw: data, hashedWith: .sha2_256)
         let cid = try CID(version: .v1, codec: codec, multihash: multihash)
         return cid.toBaseEncodedString
     }
 
     static func createSyncCID(for node: NodeType, codec: Codecs) -> String {
-        do {
-            let data = try serializeNode(node, codec: codec)
-            let multihash = try Multihash(raw: data, hashedWith: .sha2_256)
-            let cid = try CID(version: .v1, codec: codec, multihash: multihash)
-            return cid.toBaseEncodedString
-        } catch {
-            return "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
-        }
+        (try? computeCID(for: node, codec: codec)) ?? "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
     }
 
     static func serializeNode(_ node: NodeType, codec: Codecs) throws -> Data {
@@ -71,24 +64,18 @@ public extension Header {
     }
 
     func mapToData() throws -> Data {
-        guard let node = self.node else {
-            throw DataErrors.nodeNotAvailable
-        }
+        guard let node = self.node else { throw DataErrors.nodeNotAvailable }
         return try Self.serializeNode(node, codec: Self.defaultCodec)
     }
 
     func recreateCID() async throws -> String {
-        guard let node = self.node else {
-            return rawCID
-        }
-        return try await Self.createCID(for: node, codec: Self.defaultCodec)
+        guard let node = self.node else { return rawCID }
+        return try Self.computeCID(for: node, codec: Self.defaultCodec)
     }
 
     func recreateCID(withCodec codec: Codecs) async throws -> String {
-        guard let node = self.node else {
-            throw DataErrors.nodeNotAvailable
-        }
-        return try await Self.createCID(for: node, codec: codec)
+        guard let node = self.node else { throw DataErrors.nodeNotAvailable }
+        return try Self.computeCID(for: node, codec: codec)
     }
 
     var description: String {

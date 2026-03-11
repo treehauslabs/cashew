@@ -1,5 +1,93 @@
 import ArrayTrie
 
+public extension Node {
+    func evaluate(_ expression: CashewExpression) throws -> (Self, CashewResult) {
+        switch expression {
+        case .count:
+            return (self, .count(properties().count))
+
+        case .keys:
+            return (self, .list(Array(properties())))
+
+        case .sortedKeys(let limit, let after):
+            var keys = properties().sorted()
+            if let after = after {
+                keys = keys.filter { $0 > after }
+            }
+            return (self, .list(Array(keys.prefix(limit ?? .max))))
+
+        case .contains(let key):
+            return (self, .bool(get(property: key) != nil))
+
+        case .set(let key, let value):
+            let op: Transform = get(property: key) != nil ? .update(value) : .insert(value)
+            var trie = ArrayTrie<Transform>()
+            trie.set([key], value: op)
+            guard let result = try transform(transforms: trie) else {
+                throw CashewQueryError.unsupportedOperation("Transform produced empty result")
+            }
+            return (result, .ok)
+
+        case .insert, .update, .delete:
+            throw CashewQueryError.unsupportedOperation("Transforms should be compiled into ArrayTrie steps")
+
+        default:
+            throw CashewQueryError.unsupportedOperation("Expression \(expression) not supported by \(type(of: self))")
+        }
+    }
+
+    func execute(plan: CashewPlan) throws -> (Self, CashewResult) {
+        var current = self
+        var lastResult: CashewResult = .ok
+
+        for step in plan.steps {
+            switch step {
+            case .transform(let trie):
+                guard let transformed = try current.transform(transforms: trie) else {
+                    throw CashewQueryError.unsupportedOperation("Transform produced empty result")
+                }
+                current = transformed
+                lastResult = .ok
+
+            case .evaluate(let expr):
+                let (next, result) = try current.evaluate(expr)
+                current = next
+                lastResult = result
+            }
+        }
+
+        return (current, lastResult)
+    }
+
+    func query(_ input: String) throws -> (Self, CashewResult) {
+        let expressions = try CashewParser.parse(input)
+        let plan = CashewPlan.compile(expressions)
+        return try execute(plan: plan)
+    }
+
+    func execute(_ expression: CashewExpression) throws -> (Self, CashewResult) {
+        let plan = CashewPlan.compile([expression])
+        return try execute(plan: plan)
+    }
+
+    func query(_ input: String, fetcher: Fetcher) async throws -> (Self, CashewResult) {
+        let expressions = try CashewParser.parse(input)
+        let plan = CashewPlan.compile(expressions)
+        return try await execute(plan: plan, fetcher: fetcher)
+    }
+
+    func execute(_ expression: CashewExpression, fetcher: Fetcher) async throws -> (Self, CashewResult) {
+        let plan = CashewPlan.compile([expression])
+        return try await execute(plan: plan, fetcher: fetcher)
+    }
+
+    func execute(plan: CashewPlan, fetcher: Fetcher) async throws -> (Self, CashewResult) {
+        return try execute(plan: plan)
+    }
+}
+
+// MARK: - MerkleDictionary overrides
+
 func evaluateExpression<D: MerkleDictionary>(
     _ dict: D,
     _ expression: CashewExpression
@@ -30,7 +118,7 @@ func evaluateExpression<D: MerkleDictionary>(
         return (dict, .bool(try dict.get(key: key) != nil))
 
     case .set(let key, let value):
-        guard let typed = D.ValueType(value) else {
+        guard let _ = D.ValueType(value) else {
             throw CashewQueryError.invalidValue(value)
         }
         let op: Transform = try dict.get(key: key) != nil ? .update(value) : .insert(value)
@@ -50,10 +138,8 @@ func evaluateExpression<D: MerkleDictionary>(
 }
 
 public extension MerkleDictionary where ValueType: LosslessStringConvertible {
-    func query(_ input: String) throws -> (Self, CashewResult) {
-        let expressions = try CashewParser.parse(input)
-        let plan = CashewPlan.compile(expressions)
-        return try execute(plan: plan)
+    func evaluate(_ expression: CashewExpression) throws -> (Self, CashewResult) {
+        return try evaluateExpression(self, expression)
     }
 
     func execute(plan: CashewPlan) throws -> (Self, CashewResult) {
@@ -71,7 +157,7 @@ public extension MerkleDictionary where ValueType: LosslessStringConvertible {
                 lastResult = .ok
 
             case .evaluate(let expr):
-                let (next, result) = try evaluateExpression(current, expr)
+                let (next, result) = try current.evaluate(expr)
                 current = next
                 lastResult = result
             }
@@ -80,117 +166,85 @@ public extension MerkleDictionary where ValueType: LosslessStringConvertible {
         return (current, lastResult)
     }
 
-    func execute(_ expression: CashewExpression) throws -> (Self, CashewResult) {
-        let plan = CashewPlan.compile([expression])
-        return try execute(plan: plan)
-    }
-
-    func query(_ input: String, fetcher: Fetcher) async throws -> (Self, CashewResult) {
-        let expressions = try CashewParser.parse(input)
-        let plan = CashewPlan.compile(expressions)
+    func execute(plan: CashewPlan, fetcher: Fetcher) async throws -> (Self, CashewResult) {
         let paths = plan.resolutionPaths()
         let resolved = try await self.resolve(paths: paths, fetcher: fetcher)
         return try resolved.execute(plan: plan)
     }
 }
 
-public extension Header where NodeType: MerkleDictionary, NodeType.ValueType: LosslessStringConvertible {
-    func query(_ input: String) throws -> (Self, CashewResult) {
-        guard let node = node else { throw DataErrors.nodeNotAvailable }
-        let (updatedNode, result) = try node.query(input)
-        return (Self(node: updatedNode), result)
-    }
-
-    func query(_ input: String, fetcher: Fetcher) async throws -> (Self, CashewResult) {
-        let loaded = node != nil ? self : try await resolve(fetcher: fetcher)
-        guard let loadedNode = loaded.node else { throw DataErrors.nodeNotAvailable }
-        let (updatedNode, result) = try await loadedNode.query(input, fetcher: fetcher)
-        return (Self(node: updatedNode), result)
-    }
-}
-
-public extension Header where NodeType: MerkleArray, NodeType.ValueType: LosslessStringConvertible {
-    func query(_ input: String) throws -> (Self, CashewResult) {
-        guard let node = node else { throw DataErrors.nodeNotAvailable }
-        let (updatedNode, result): (NodeType, CashewResult) = try node.query(input)
-        return (Self(node: updatedNode), result)
-    }
-
-    func query(_ input: String, fetcher: Fetcher) async throws -> (Self, CashewResult) {
-        let loaded = node != nil ? self : try await resolve(fetcher: fetcher)
-        guard let loadedNode = loaded.node else { throw DataErrors.nodeNotAvailable }
-        let (updatedNode, result): (NodeType, CashewResult) = try await loadedNode.query(input, fetcher: fetcher)
-        return (Self(node: updatedNode), result)
-    }
-}
+// MARK: - MerkleArray overrides
 
 public extension MerkleArray where ValueType: LosslessStringConvertible {
+    func evaluate(_ expression: CashewExpression) throws -> (Self, CashewResult) {
+        switch expression {
+        case .getAt(let index):
+            let value = try get(at: index)
+            return (self, .value(value.map { "\($0)" }))
+
+        case .first:
+            let value = try first()
+            return (self, .value(value.map { "\($0)" }))
+
+        case .last:
+            let value = try last()
+            return (self, .value(value.map { "\($0)" }))
+
+        case .append(let value):
+            guard let _ = ValueType(value) else {
+                throw CashewQueryError.invalidValue(value)
+            }
+            var trie = ArrayTrie<Transform>()
+            trie.set([Self.binaryKey(count)], value: .insert(value))
+            if let transformed = try transform(transforms: trie) {
+                return (transformed, .ok)
+            }
+            return (self, .ok)
+
+        default:
+            return try evaluateExpression(self, expression)
+        }
+    }
+
+}
+
+// MARK: - Header delegation
+
+public extension Header {
+    private func withNode(_ body: (NodeType) throws -> (NodeType, CashewResult)) throws -> (Self, CashewResult) {
+        guard let node = node else { throw DataErrors.nodeNotAvailable }
+        let (updatedNode, result) = try body(node)
+        return (Self(node: updatedNode), result)
+    }
+
+    private func withResolvedNode(fetcher: Fetcher, _ body: (NodeType) async throws -> (NodeType, CashewResult)) async throws -> (Self, CashewResult) {
+        let loaded = node != nil ? self : try await resolve(fetcher: fetcher)
+        guard let loadedNode = loaded.node else { throw DataErrors.nodeNotAvailable }
+        let (updatedNode, result) = try await body(loadedNode)
+        return (Self(node: updatedNode), result)
+    }
+
     func query(_ input: String) throws -> (Self, CashewResult) {
-        let expressions = try CashewParser.parse(input)
-        let plan = CashewPlan.compile(expressions)
-        return try execute(plan: plan)
+        try withNode { try $0.query(input) }
     }
 
     func execute(plan: CashewPlan) throws -> (Self, CashewResult) {
-        var current = self
-        var lastResult: CashewResult = .ok
-
-        for step in plan.steps {
-            switch step {
-            case .transform(let trie):
-                if let transformed = try current.transform(transforms: trie) {
-                    current = transformed
-                } else {
-                    current = Self()
-                }
-                lastResult = .ok
-
-            case .evaluate(let expr):
-                switch expr {
-                case .getAt(let index):
-                    let value = try current.get(at: index)
-                    lastResult = .value(value.map { "\($0)" })
-
-                case .first:
-                    let value = try current.first()
-                    lastResult = .value(value.map { "\($0)" })
-
-                case .last:
-                    let value = try current.last()
-                    lastResult = .value(value.map { "\($0)" })
-
-                case .append(let value):
-                    guard let typed = ValueType(value) else {
-                        throw CashewQueryError.invalidValue(value)
-                    }
-                    var trie = ArrayTrie<Transform>()
-                    trie.set([Self.binaryKey(current.count)], value: .insert(value))
-                    if let transformed = try current.transform(transforms: trie) {
-                        current = transformed
-                    }
-                    lastResult = .ok
-
-                default:
-                    let (next, result) = try evaluateExpression(current, expr)
-                    current = next
-                    lastResult = result
-                }
-            }
-        }
-
-        return (current, lastResult)
+        try withNode { try $0.execute(plan: plan) }
     }
 
     func execute(_ expression: CashewExpression) throws -> (Self, CashewResult) {
-        let plan = CashewPlan.compile([expression])
-        return try execute(plan: plan)
+        try withNode { try $0.execute(expression) }
     }
 
     func query(_ input: String, fetcher: Fetcher) async throws -> (Self, CashewResult) {
-        let expressions = try CashewParser.parse(input)
-        let plan = CashewPlan.compile(expressions)
-        let paths = plan.resolutionPaths()
-        let resolved = try await self.resolve(paths: paths, fetcher: fetcher)
-        return try resolved.execute(plan: plan)
+        try await withResolvedNode(fetcher: fetcher) { try await $0.query(input, fetcher: fetcher) }
+    }
+
+    func execute(plan: CashewPlan, fetcher: Fetcher) async throws -> (Self, CashewResult) {
+        try await withResolvedNode(fetcher: fetcher) { try await $0.execute(plan: plan, fetcher: fetcher) }
+    }
+
+    func execute(_ expression: CashewExpression, fetcher: Fetcher) async throws -> (Self, CashewResult) {
+        try await withResolvedNode(fetcher: fetcher) { try await $0.execute(plan: CashewPlan.compile([expression]), fetcher: fetcher) }
     }
 }
