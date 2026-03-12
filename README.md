@@ -745,6 +745,62 @@ Build a transaction ledger and generate existence/insertion/deletion proofs. Pro
 | `SparseMerkleProof` | `.insertion`, `.mutation`, `.deletion`, `.existence` | Proof types for sparse Merkle proofs |
 | `EncryptionStrategy` | `.targeted(key)`, `.list(key)`, `.recursive(key)` | Controls what gets encrypted at each path |
 
+### Diffing
+
+Compare two versions of any data structure to see what changed. Identical subtrees are skipped by CID comparison, so cost is proportional to the number of changes, not the size of the tree.
+
+```swift
+let v1 = try MerkleDictionaryImpl<String>()
+    .inserting(key: "alice", value: "engineer")
+    .inserting(key: "bob", value: "designer")
+
+let v2 = try v1
+    .deleting(key: "bob")
+    .deleting(key: "alice").inserting(key: "alice", value: "lead")
+    .inserting(key: "carol", value: "intern")
+
+let diff = try v2.diff(from: v1)
+print(diff)
+// + carol: intern
+// - bob: designer
+// ~ alice: engineer → lead
+
+diff.inserted  // ["carol": "intern"]
+diff.deleted   // ["bob": "designer"]
+diff.modified  // ["alice": ModifiedEntry(old: "engineer", new: "lead")]
+diff.changeCount  // 3
+```
+
+For `MerkleDictionary`, diff operates at the logical key level — you see actual key names and values, not internal trie structure. For nested structures, modified entries include recursive child diffs:
+
+```swift
+let oldInner = try MerkleDictionaryImpl<String>().inserting(key: "role", value: "ic")
+let newInner = try MerkleDictionaryImpl<String>().inserting(key: "role", value: "lead")
+
+let old = try MerkleDictionaryImpl<HeaderImpl<MerkleDictionaryImpl<String>>>()
+    .inserting(key: "alice", value: HeaderImpl(node: oldInner))
+let new = try MerkleDictionaryImpl<HeaderImpl<MerkleDictionaryImpl<String>>>()
+    .inserting(key: "alice", value: HeaderImpl(node: newInner))
+
+let diff = try new.diff(from: old)
+print(diff)
+// ~ alice:
+//   ~ role: ic → lead
+```
+
+Custom nodes, Headers, and the async variant all support diffing:
+
+```swift
+// Node-level diff (structural, uses properties()/get(property:))
+let diff = newFleet.diff(from: oldFleet)
+
+// Header diff (short-circuits on matching CIDs)
+let diff = try newHeader.diff(from: oldHeader)
+
+// Async: resolves unresolved headers before diffing
+let diff = try await newHeader.diff(from: oldHeader, fetcher: myFetcher)
+```
+
 ### Error Types
 
 | Error | Cases |
