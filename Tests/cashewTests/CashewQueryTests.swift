@@ -1458,116 +1458,381 @@ struct QueryAllTypesTests {
         }
     }
 
+    // MARK: - Custom Node Queries
+    //
+    // Domain model — an org chart with three levels of custom nodes:
+    //
+    //   Org (custom Node)
+    //    └─ departments: [name → Header<Team>]
+    //         └─ Team (custom Node)
+    //              └─ members: [name → Header<MerkleDictionaryImpl<String>>]  (profiles)
+    //
+    // Queries can drill through all three levels automatically:
+    //   get "eng" | get "alice" | get "role"  →  .value("lead")
+
+    struct Team: Node, Sendable {
+        var members: [String: HeaderImpl<MerkleDictionaryImpl<String>>] = [:]
+
+        func properties() -> Set<String> { Set(members.keys) }
+        func get(property: String) -> (any Header)? { members[property] }
+        func set(properties: [String: any Header]) -> Team {
+            var copy = self
+            for (k, v) in properties { copy.members[k] = v as? HeaderImpl<MerkleDictionaryImpl<String>> }
+            return copy
+        }
+
+        func toData() -> Data? { nil }
+        init?(data: Data) { nil }
+        init(members: [String: HeaderImpl<MerkleDictionaryImpl<String>>] = [:]) { self.members = members }
+    }
+
+    struct Org: Node, Sendable {
+        var departments: [String: HeaderImpl<Team>] = [:]
+
+        func properties() -> Set<String> { Set(departments.keys) }
+        func get(property: String) -> (any Header)? { departments[property] }
+        func set(properties: [String: any Header]) -> Org {
+            var copy = self
+            for (k, v) in properties { copy.departments[k] = v as? HeaderImpl<Team> }
+            return copy
+        }
+
+        func toData() -> Data? { nil }
+        init?(data: Data) { nil }
+        init(departments: [String: HeaderImpl<Team>] = [:]) { self.departments = departments }
+    }
+
+    static func profile(_ kvs: (String, String)...) throws -> HeaderImpl<MerkleDictionaryImpl<String>> {
+        var dict = MerkleDictionaryImpl<String>()
+        for (k, v) in kvs { dict = try dict.inserting(key: k, value: v) }
+        return HeaderImpl(node: dict)
+    }
+
+    static func sampleOrg() throws -> Org {
+        let eng = Team(members: [
+            "alice": try profile(("role", "lead"), ("level", "senior")),
+            "bob":   try profile(("role", "ic"), ("level", "mid")),
+        ])
+        let design = Team(members: [
+            "carol": try profile(("role", "lead"), ("level", "senior")),
+            "dave":  try profile(("role", "ic"), ("level", "junior")),
+            "eve":   try profile(("role", "ic"), ("level", "mid")),
+        ])
+        return Org(departments: [
+            "eng":    HeaderImpl(node: eng),
+            "design": HeaderImpl(node: design),
+        ])
+    }
+
     @Suite("Custom Node Queries")
     struct CustomNodeTests {
 
-        struct ScoreBoard: Node, Sendable {
-            var players: [String: HeaderImpl<MerkleDictionaryImpl<String>>] = [:]
+        @Test("Three-level pipeline: org → team → profile field")
+        func testDeepPipeline() throws {
+            let org = try sampleOrg()
+            let (_, role) = try org.query(#"get "eng" | get "alice" | get "role""#)
+            #expect(role == .value("lead"))
 
-            func properties() -> Set<String> { Set(players.keys) }
-            func get(property: String) -> (any Header)? { players[property] }
-            func set(properties: [String: any Header]) -> ScoreBoard {
-                var copy = self
-                for (k, v) in properties {
-                    copy.players[k] = v as? HeaderImpl<MerkleDictionaryImpl<String>>
+            let (_, level) = try org.query(#"get "design" | get "dave" | get "level""#)
+            #expect(level == .value("junior"))
+        }
+
+        @Test("Pipeline queries at each level of the hierarchy")
+        func testEachLevel() throws {
+            let org = try sampleOrg()
+
+            let (_, depts) = try org.query("keys sorted")
+            #expect(depts == .list(["design", "eng"]))
+
+            let (_, members) = try org.query(#"get "design" | keys sorted"#)
+            #expect(members == .list(["carol", "dave", "eve"]))
+
+            let (_, fields) = try org.query(#"get "eng" | get "bob" | keys sorted"#)
+            #expect(fields == .list(["level", "role"]))
+        }
+
+        @Test("Count at each level")
+        func testCountAtEachLevel() throws {
+            let org = try sampleOrg()
+
+            let (_, orgCount) = try org.query("count")
+            #expect(orgCount == .count(2))
+
+            let (_, teamCount) = try org.query(#"get "design" | count"#)
+            #expect(teamCount == .count(3))
+
+            let (_, profileCount) = try org.query(#"get "eng" | get "alice" | count"#)
+            #expect(profileCount == .count(2))
+        }
+
+        @Test("Contains checks at different levels")
+        func testContainsMultiLevel() throws {
+            let org = try sampleOrg()
+
+            let (_, hasDept) = try org.query(#"contains "eng""#)
+            #expect(hasDept == .bool(true))
+
+            let (_, hasMember) = try org.query(#"get "eng" | contains "alice""#)
+            #expect(hasMember == .bool(true))
+
+            let (_, noMember) = try org.query(#"get "eng" | contains "carol""#)
+            #expect(noMember == .bool(false))
+        }
+
+        @Test("Paginated keys on a team")
+        func testPaginatedKeys() throws {
+            let org = try sampleOrg()
+
+            let (_, first2) = try org.query(#"get "design" | keys sorted limit 2"#)
+            #expect(first2 == .list(["carol", "dave"]))
+
+            let (_, afterD) = try org.query(#"get "design" | keys sorted after "dave""#)
+            #expect(afterD == .list(["eve"]))
+        }
+
+        @Test("Pipeline works even when evaluate is overridden")
+        func testPipelineBypassesCustomEvaluate() throws {
+            struct CustomOrg: Node, Sendable {
+                var departments: [String: HeaderImpl<Team>] = [:]
+                func properties() -> Set<String> { Set(departments.keys) }
+                func get(property: String) -> (any Header)? { departments[property] }
+                func set(properties: [String: any Header]) -> CustomOrg {
+                    var copy = self
+                    for (k, v) in properties { copy.departments[k] = v as? HeaderImpl<Team> }
+                    return copy
                 }
+
+                func evaluate(_ expression: CashewExpression) throws -> (CustomOrg, CashewResult) {
+                    switch expression {
+                    case .count:
+                        return (self, .value("\(departments.count) departments"))
+                    default:
+                        return try defaultEvaluate(expression)
+                    }
+                }
+
+                func toData() -> Data? { nil }
+                init?(data: Data) { nil }
+                init(departments: [String: HeaderImpl<Team>]) { self.departments = departments }
+            }
+
+            let base = try sampleOrg()
+            let custom = CustomOrg(departments: base.departments)
+
+            let (_, count) = try custom.query("count")
+            #expect(count == .value("2 departments"))
+
+            let (_, role) = try custom.query(#"get "eng" | get "alice" | get "role""#)
+            #expect(role == .value("lead"))
+        }
+
+        @Test("Header wrapping a custom node delegates queries through")
+        func testHeaderDelegation() throws {
+            let org = try sampleOrg()
+            let header = HeaderImpl(node: org)
+
+            let (_, depts) = try header.query("keys sorted")
+            #expect(depts == .list(["design", "eng"]))
+
+            let (_, role) = try header.query(#"get "eng" | get "bob" | get "role""#)
+            #expect(role == .value("ic"))
+        }
+
+        @Test("Missing key at any level returns nil")
+        func testMissingKeys() throws {
+            let org = try sampleOrg()
+
+            let (_, noDept) = try org.query(#"get "sales""#)
+            #expect(noDept == .value(nil))
+
+            let (_, noMember) = try org.query(#"get "eng" | get "zach""#)
+            #expect(noMember == .value(nil))
+        }
+    }
+
+    @Suite("Exploring a Server Fleet")
+    struct FleetExplorationTests {
+
+        // A sysadmin's mental model of their infrastructure:
+        //
+        //   Fleet
+        //    ├─ web-1  →  Server
+        //    │              ├─ nginx   →  { port: "443", status: "healthy", version: "1.25" }
+        //    │              └─ app     →  { port: "8080", status: "healthy", version: "3.1.0" }
+        //    ├─ web-2  →  Server
+        //    │              ├─ nginx   →  { port: "443", status: "degraded", version: "1.24" }
+        //    │              └─ app     →  { port: "8080", status: "healthy", version: "3.0.9" }
+        //    ├─ db-1   →  Server
+        //    │              └─ postgres → { port: "5432", status: "healthy", version: "16.2", role: "primary" }
+        //    └─ db-2   →  Server
+        //                   └─ postgres → { port: "5432", status: "healthy", version: "16.2", role: "replica" }
+
+        typealias ServiceConfig = MerkleDictionaryImpl<String>
+
+        struct Server: Node, Sendable {
+            var services: [String: HeaderImpl<ServiceConfig>] = [:]
+
+            func properties() -> Set<String> { Set(services.keys) }
+            func get(property: String) -> (any Header)? { services[property] }
+            func set(properties: [String: any Header]) -> Server {
+                var copy = self
+                for (k, v) in properties { copy.services[k] = v as? HeaderImpl<ServiceConfig> }
                 return copy
             }
 
             func toData() -> Data? { nil }
-            init?(data: Data) { return nil }
-            init() {}
-            init(players: [String: HeaderImpl<MerkleDictionaryImpl<String>>]) { self.players = players }
+            init?(data: Data) { nil }
+            init(services: [String: HeaderImpl<ServiceConfig>] = [:]) { self.services = services }
         }
 
-        struct CustomEvalBoard: Node, Sendable {
-            var players: [String: HeaderImpl<MerkleDictionaryImpl<String>>] = [:]
+        struct Fleet: Node, Sendable {
+            var hosts: [String: HeaderImpl<Server>] = [:]
 
-            func properties() -> Set<String> { Set(players.keys) }
-            func get(property: String) -> (any Header)? { players[property] }
-            func set(properties: [String: any Header]) -> CustomEvalBoard {
+            func properties() -> Set<String> { Set(hosts.keys) }
+            func get(property: String) -> (any Header)? { hosts[property] }
+            func set(properties: [String: any Header]) -> Fleet {
                 var copy = self
-                for (k, v) in properties {
-                    copy.players[k] = v as? HeaderImpl<MerkleDictionaryImpl<String>>
-                }
+                for (k, v) in properties { copy.hosts[k] = v as? HeaderImpl<Server> }
                 return copy
             }
 
-            func evaluate(_ expression: CashewExpression) throws -> (CustomEvalBoard, CashewResult) {
-                switch expression {
-                case .count:
-                    return (self, .value("players: \(players.count)"))
-                default:
-                    return try defaultEvaluate(expression)
-                }
-            }
-
             func toData() -> Data? { nil }
-            init?(data: Data) { return nil }
-            init() {}
-            init(players: [String: HeaderImpl<MerkleDictionaryImpl<String>>]) { self.players = players }
+            init?(data: Data) { nil }
+            init(hosts: [String: HeaderImpl<Server>] = [:]) { self.hosts = hosts }
         }
 
-        static func makeBoard() throws -> [String: HeaderImpl<MerkleDictionaryImpl<String>>] {
-            let inner = try MerkleDictionaryImpl<String>()
-                .inserting(key: "score", value: "100")
-                .inserting(key: "role", value: "tank")
-            return ["alice": HeaderImpl(node: inner)]
+        static func config(_ kvs: (String, String)...) throws -> HeaderImpl<ServiceConfig> {
+            var dict = ServiceConfig()
+            for (k, v) in kvs { dict = try dict.inserting(key: k, value: v) }
+            return HeaderImpl(node: dict)
         }
 
-        @Test("Pipeline navigates into children automatically")
-        func testAutomaticPipeline() throws {
-            let board = ScoreBoard(players: try Self.makeBoard())
-
-            let (_, result) = try board.query(#"get "alice" | get "score""#)
-            #expect(result == .value("100"))
-
-            let (_, keys) = try board.query(#"get "alice" | keys sorted"#)
-            #expect(keys == .list(["role", "score"]))
-
-            let (_, count) = try board.query(#"get "alice" | count"#)
-            #expect(count == .count(2))
+        static func fleet() throws -> Fleet {
+            let web1 = Server(services: [
+                "nginx": try config(("port", "443"), ("status", "healthy"), ("version", "1.25")),
+                "app":   try config(("port", "8080"), ("status", "healthy"), ("version", "3.1.0")),
+            ])
+            let web2 = Server(services: [
+                "nginx": try config(("port", "443"), ("status", "degraded"), ("version", "1.24")),
+                "app":   try config(("port", "8080"), ("status", "healthy"), ("version", "3.0.9")),
+            ])
+            let db1 = Server(services: [
+                "postgres": try config(("port", "5432"), ("status", "healthy"), ("version", "16.2"), ("role", "primary")),
+            ])
+            let db2 = Server(services: [
+                "postgres": try config(("port", "5432"), ("status", "healthy"), ("version", "16.2"), ("role", "replica")),
+            ])
+            return Fleet(hosts: [
+                "web-1": HeaderImpl(node: web1),
+                "web-2": HeaderImpl(node: web2),
+                "db-1":  HeaderImpl(node: db1),
+                "db-2":  HeaderImpl(node: db2),
+            ])
         }
 
-        @Test("Pipeline works even when evaluate is overridden without defaultEvaluate for get")
-        func testPipelineBypassesEvaluate() throws {
-            let board = CustomEvalBoard(players: try Self.makeBoard())
+        @Test("Explore the fleet like a sysadmin would")
+        func testExploration() throws {
+            let fleet = try Self.fleet()
 
-            let (_, result) = try board.query(#"get "alice" | get "score""#)
-            #expect(result == .value("100"))
+            // "What hosts do we have?"
+            let (_, hosts) = try fleet.query("keys sorted")
+            #expect(hosts == .list(["db-1", "db-2", "web-1", "web-2"]))
 
-            let (_, keys) = try board.query(#"get "alice" | keys sorted"#)
-            #expect(keys == .list(["role", "score"]))
+            // "How many hosts?"
+            let (_, hostCount) = try fleet.query("count")
+            #expect(hostCount == .count(4))
+
+            // "What services run on web-1?"
+            let (_, services) = try fleet.query(#"get "web-1" | keys sorted"#)
+            #expect(services == .list(["app", "nginx"]))
+
+            // "What's the nginx config on web-2?"
+            let (_, nginxConfig) = try fleet.query(#"get "web-2" | get "nginx" | values sorted"#)
+            #expect(nginxConfig == .entries([
+                (key: "port", value: "443"),
+                (key: "status", value: "degraded"),
+                (key: "version", value: "1.24"),
+            ]))
+
+            // "Is web-2's nginx degraded?"
+            let (_, status) = try fleet.query(#"get "web-2" | get "nginx" | get "status""#)
+            #expect(status == .value("degraded"))
+
+            // "What version is the app on web-1?"
+            let (_, appVersion) = try fleet.query(#"get "web-1" | get "app" | get "version""#)
+            #expect(appVersion == .value("3.1.0"))
+
+            // "Is db-1 the primary?"
+            let (_, role) = try fleet.query(#"get "db-1" | get "postgres" | get "role""#)
+            #expect(role == .value("primary"))
+
+            // "Does db-2 run postgres?"
+            let (_, hasPg) = try fleet.query(#"get "db-2" | contains "postgres""#)
+            #expect(hasPg == .bool(true))
+
+            // "Does db-2 run nginx?"
+            let (_, hasNginx) = try fleet.query(#"get "db-2" | contains "nginx""#)
+            #expect(hasNginx == .bool(false))
+
+            // "Do we have a host called cache-1?"
+            let (_, hasCache) = try fleet.query(#"contains "cache-1""#)
+            #expect(hasCache == .bool(false))
+
+            // "How many config keys does postgres on db-1 have?"
+            let (_, pgKeys) = try fleet.query(#"get "db-1" | get "postgres" | count"#)
+            #expect(pgKeys == .count(4))
         }
 
-        @Test("Custom evaluate overrides count but defaultEvaluate handles rest")
-        func testCustomCountFallsThrough() throws {
-            let board = CustomEvalBoard(players: try Self.makeBoard())
+        @Test("Wrap the fleet in a Header and explore the same way")
+        func testHeaderWrapped() throws {
+            let header = HeaderImpl(node: try Self.fleet())
 
-            let (_, count) = try board.query("count")
-            #expect(count == .value("players: 1"))
+            let (_, hosts) = try header.query("keys sorted")
+            #expect(hosts == .list(["db-1", "db-2", "web-1", "web-2"]))
 
-            let (_, keys) = try board.query("keys")
-            #expect(keys == .list(["alice"]))
+            let (_, version) = try header.query(#"get "web-1" | get "app" | get "version""#)
+            #expect(version == .value("3.1.0"))
         }
 
-        @Test("Contains works on custom node")
-        func testContains() throws {
-            let board = ScoreBoard(players: try Self.makeBoard())
+        @Test("Browse the first two hosts, then paginate to the rest")
+        func testPaginatedBrowsing() throws {
+            let fleet = try Self.fleet()
 
-            let (_, yes) = try board.query(#"contains "alice""#)
-            #expect(yes == .bool(true))
-            let (_, no) = try board.query(#"contains "bob""#)
-            #expect(no == .bool(false))
+            let (_, page1) = try fleet.query("keys sorted limit 2")
+            #expect(page1 == .list(["db-1", "db-2"]))
+
+            let (_, page2) = try fleet.query(#"keys sorted limit 2 after "db-2""#)
+            #expect(page2 == .list(["web-1", "web-2"]))
+
+            let (_, page3) = try fleet.query(#"keys sorted after "web-2""#)
+            #expect(page3 == .list([]))
         }
 
-        @Test("Terminal get returns .node on custom node")
-        func testTerminalGet() throws {
-            let board = ScoreBoard(players: try Self.makeBoard())
-            let (_, result) = try board.query(#"get "alice""#)
-            if case .node = result {} else {
-                Issue.record("Expected .node, got \(result)")
-            }
+        @Test("Drill down to find a problem, then fix it at each level")
+        func testDrillDownAndFix() throws {
+            let fleet = try Self.fleet()
+
+            // Discover the degraded service
+            let (_, before) = try fleet.query(#"get "web-2" | get "nginx" | get "status""#)
+            #expect(before == .value("degraded"))
+
+            // Fix at the config level, then rebuild upward (immutable tree)
+            let nginx = fleet.hosts["web-2"]!.node!.services["nginx"]!.node!
+            let (fixedNginx, _) = try nginx.query(#"set "status" = "healthy""#)
+
+            let fixedServer = Server(services: [
+                "nginx": HeaderImpl(node: fixedNginx),
+                "app":   fleet.hosts["web-2"]!.node!.services["app"]!,
+            ])
+            let fixedFleet = Fleet(hosts: fleet.hosts.merging(
+                ["web-2": HeaderImpl(node: fixedServer)]) { _, new in new })
+
+            // Verify the fix, and that other hosts are untouched
+            let (_, after) = try fixedFleet.query(#"get "web-2" | get "nginx" | get "status""#)
+            #expect(after == .value("healthy"))
+
+            let (_, web1ok) = try fixedFleet.query(#"get "web-1" | get "nginx" | get "status""#)
+            #expect(web1ok == .value("healthy"))
         }
     }
 }

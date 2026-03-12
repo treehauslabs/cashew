@@ -605,6 +605,53 @@ let (_, result) = try header.query("count")  // delegates to state.query("count"
 let (_, result) = try await unresolvedHeader.query("count", fetcher: myFetcher)
 ```
 
+#### Example: Exploring a Server Fleet
+
+Three levels of custom nodes — Fleet → Server → service config — queried with the same pipeline syntax:
+
+```swift
+struct Server: Node {
+    var services: [String: HeaderImpl<MerkleDictionaryImpl<String>>] = [:]
+    func get(property: PathSegment) -> (any Header)? { services[property] }
+    func properties() -> Set<PathSegment> { Set(services.keys) }
+    func set(properties: [PathSegment: any Header]) -> Self { /* ... */ }
+}
+
+struct Fleet: Node {
+    var hosts: [String: HeaderImpl<Server>] = [:]
+    func get(property: PathSegment) -> (any Header)? { hosts[property] }
+    func properties() -> Set<PathSegment> { Set(hosts.keys) }
+    func set(properties: [PathSegment: any Header]) -> Self { /* ... */ }
+}
+```
+
+Once built, the entire hierarchy is explorable with queries:
+
+```swift
+let fleet = Fleet(hosts: [
+    "web-1": HeaderImpl(node: Server(services: [
+        "nginx": HeaderImpl(node: try config(("port", "443"), ("status", "healthy"))),
+        "app":   HeaderImpl(node: try config(("port", "8080"), ("version", "3.1.0"))),
+    ])),
+    "db-1": HeaderImpl(node: Server(services: [
+        "postgres": HeaderImpl(node: try config(("port", "5432"), ("role", "primary"))),
+    ])),
+    // ...
+])
+
+try fleet.query("keys sorted")                                    // .list(["db-1", "web-1"])
+try fleet.query("count")                                          // .count(2)
+try fleet.query(#"get "web-1" | keys sorted"#)                    // .list(["app", "nginx"])
+try fleet.query(#"get "web-1" | get "nginx" | get "status""#)     // .value("healthy")
+try fleet.query(#"get "db-1" | get "postgres" | get "role""#)     // .value("primary")
+try fleet.query(#"get "db-1" | contains "postgres""#)             // .bool(true)
+try fleet.query(#"get "web-1" | get "nginx" | values sorted"#)    // .entries([("port","443"), ...])
+try fleet.query("keys sorted limit 1")                            // .list(["db-1"])
+try fleet.query(#"keys sorted after "db-1""#)                     // .list(["web-1"])
+```
+
+No overrides needed — `Fleet` and `Server` only implement the three `Node` requirements (`get(property:)`, `properties()`, `set(properties:)`), and pipelines, pagination, containment checks, and deep traversal all work automatically.
+
 #### Execution Model
 
 Queries compile into a `CashewPlan` that batches consecutive transforms into a single `ArrayTrie<Transform>`, applied in one pass via the existing `transform(transforms:)` machinery. Reads flush pending transforms first.
