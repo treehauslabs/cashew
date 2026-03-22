@@ -340,4 +340,159 @@ struct ContentAddressabilityTests {
             #expect(HeaderImpl(node: transformResult).rawCID == HeaderImpl(node: manualResult).rawCID)
         }
     }
+
+    @Suite("Cross-Platform Deterministic Serialization")
+    struct CrossPlatformDeterminism {
+
+        @Test("MerkleDictionary serialization bytes are stable across runs")
+        func testDictionarySerializationStable() throws {
+            let dict = try MerkleDictionaryImpl<String>(children: [:], count: 0)
+                .inserting(key: "alpha", value: "1")
+                .inserting(key: "beta", value: "2")
+                .inserting(key: "gamma", value: "3")
+
+            let bytes1 = try HeaderImpl(node: dict).mapToData()
+            let bytes2 = try HeaderImpl(node: dict).mapToData()
+            #expect(bytes1 == bytes2)
+        }
+
+        @Test("MerkleSet serialization bytes are stable across runs")
+        func testSetSerializationStable() throws {
+            let set = try MerkleSetImpl()
+                .insert("alice")
+                .insert("bob")
+                .insert("charlie")
+
+            let bytes1 = try HeaderImpl(node: set).mapToData()
+            let bytes2 = try HeaderImpl(node: set).mapToData()
+            #expect(bytes1 == bytes2)
+        }
+
+        @Test("MerkleArray serialization bytes are stable across runs")
+        func testArraySerializationStable() throws {
+            var arr = MerkleArrayImpl<String>()
+            arr = try arr.append("x")
+            arr = try arr.append("y")
+            arr = try arr.append("z")
+
+            let bytes1 = try HeaderImpl(node: arr).mapToData()
+            let bytes2 = try HeaderImpl(node: arr).mapToData()
+            #expect(bytes1 == bytes2)
+        }
+
+        @Test("RadixNode serialization bytes are stable across runs")
+        func testRadixNodeSerializationStable() throws {
+            let dict = try MerkleDictionaryImpl<String>(children: [:], count: 0)
+                .inserting(key: "hello", value: "world")
+            let radixNode = dict.children.first!.value.node!
+
+            let bytes1 = try HeaderImpl(node: radixNode).mapToData()
+            let bytes2 = try HeaderImpl(node: radixNode).mapToData()
+            #expect(bytes1 == bytes2)
+        }
+
+        @Test("MerkleDictionary CID matches pinned value")
+        func testDictionaryCIDPinned() throws {
+            let dict = try MerkleDictionaryImpl<String>(children: [:], count: 0)
+                .inserting(key: "alpha", value: "1")
+                .inserting(key: "beta", value: "2")
+                .inserting(key: "gamma", value: "3")
+            let cid = HeaderImpl(node: dict).rawCID
+            #expect(cid == "baguqeera7dby34qip4jmi4iifsbodkfyxz7l65sadsc3ndbyviulssqhjooa")
+        }
+
+        @Test("MerkleSet CID matches pinned value")
+        func testSetCIDPinned() throws {
+            let set = try MerkleSetImpl()
+                .insert("alice")
+                .insert("bob")
+                .insert("charlie")
+            let cid = HeaderImpl(node: set).rawCID
+            #expect(cid == "baguqeeraozymvxga7z33frhdzb2kgezw6d5o72hqlf427uiz2wnc3ukr4zda")
+        }
+
+        @Test("MerkleArray CID matches pinned value")
+        func testArrayCIDPinned() throws {
+            var arr = MerkleArrayImpl<String>()
+            arr = try arr.append("x")
+            arr = try arr.append("y")
+            arr = try arr.append("z")
+            let cid = HeaderImpl(node: arr).rawCID
+            #expect(cid == "baguqeera4aqqyyufpjxedkr32tv6yowq4d2mtuhmq5fwrhhq66nkafyuy65q")
+        }
+
+        @Test("RadixNode CID matches pinned value")
+        func testRadixNodeCIDPinned() throws {
+            let dict = try MerkleDictionaryImpl<String>(children: [:], count: 0)
+                .inserting(key: "hello", value: "world")
+            let radixNode = dict.children.first!.value.node!
+            let cid = HeaderImpl(node: radixNode).rawCID
+            #expect(cid == "baguqeerapaflociyeanif7x2hpuofkrqhvl6reaqealrbmbjxwdrzn7u4nyq")
+        }
+
+        @Test("MerkleSet insertion order does not affect CID")
+        func testSetInsertionOrderIndependentCID() throws {
+            let s1 = try MerkleSetImpl()
+                .insert("alice").insert("bob").insert("charlie")
+            let s2 = try MerkleSetImpl()
+                .insert("charlie").insert("alice").insert("bob")
+            let s3 = try MerkleSetImpl()
+                .insert("bob").insert("charlie").insert("alice")
+
+            let h1 = HeaderImpl(node: s1)
+            let h2 = HeaderImpl(node: s2)
+            let h3 = HeaderImpl(node: s3)
+            #expect(h1.rawCID == h2.rawCID)
+            #expect(h2.rawCID == h3.rawCID)
+        }
+
+        @Test("MerkleSet insertion order does not affect serialization bytes")
+        func testSetInsertionOrderIndependentBytes() throws {
+            let s1 = try MerkleSetImpl()
+                .insert("alice").insert("bob").insert("charlie")
+            let s2 = try MerkleSetImpl()
+                .insert("charlie").insert("alice").insert("bob")
+
+            let b1 = try HeaderImpl(node: s1).mapToData()
+            let b2 = try HeaderImpl(node: s2).mapToData()
+            #expect(b1 == b2)
+        }
+
+        @Test("MerkleArray serialization bytes match across equivalent constructions")
+        func testArrayEquivalentConstructionBytes() throws {
+            var arr1 = MerkleArrayImpl<String>()
+            arr1 = try arr1.append("a")
+            arr1 = try arr1.append("b")
+
+            var arr2 = MerkleArrayImpl<String>()
+            arr2 = try arr2.append("a")
+            arr2 = try arr2.append("b")
+
+            let b1 = try HeaderImpl(node: arr1).mapToData()
+            let b2 = try HeaderImpl(node: arr2).mapToData()
+            #expect(b1 == b2)
+        }
+
+        @Test("Serialized JSON has sorted keys for all node types")
+        func testSerializedJSONKeyOrder() throws {
+            let dict = try MerkleDictionaryImpl<String>(children: [:], count: 0)
+                .inserting(key: "z", value: "1")
+                .inserting(key: "a", value: "2")
+            let dictJSON = String(data: try HeaderImpl(node: dict).mapToData(), encoding: .utf8)!
+
+            let set = try MerkleSetImpl().insert("z").insert("a")
+            let setJSON = String(data: try HeaderImpl(node: set).mapToData(), encoding: .utf8)!
+
+            var arr = MerkleArrayImpl<String>()
+            arr = try arr.append("val")
+            let arrJSON = String(data: try HeaderImpl(node: arr).mapToData(), encoding: .utf8)!
+
+            for json in [dictJSON, setJSON, arrJSON] {
+                let childrenRange = json.range(of: "\"children\"")!
+                let countRange = json.range(of: "\"count\"")!
+                #expect(childrenRange.lowerBound < countRange.lowerBound,
+                        "Keys should be sorted alphabetically: 'children' before 'count'. Got: \(json)")
+            }
+        }
+    }
 }
