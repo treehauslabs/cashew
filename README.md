@@ -25,7 +25,7 @@ Most key-value stores treat data as a mutable blob. Cashew treats data as an imm
 
 - Content-addressable storage backends (IPFS, CAS databases)
 - Versioned state where every mutation must be auditable
-- Distributed systems that need tamper-evident data exchange
+- Distributed systems that need tamper-evident data exchange with data locality hints
 - Selective encryption — some fields public, some private, same data structure
 - Sparse proofs — prove properties about specific keys without the full dataset
 
@@ -47,6 +47,7 @@ Most key-value stores treat data as a mutable blob. Cashew treats data as an imm
 | **MerkleDictionary** | The top-level key-value map. Dispatches by first character to a compressed radix trie. |
 | **MerkleArray** | Append-only ordered collection backed by a `MerkleDictionary` with UInt256 binary keys. Supports efficient range queries. |
 | **MerkleSet** | Membership-only set backed by a `MerkleDictionary` with empty string sentinels. Supports union, intersection, difference. |
+| **Volume** | A `Header` subtype marking a point in the DAG where peers may store child blocks contiguously. Notifies the fetcher before resolving so it can locate the right peer. |
 
 ## Installation
 
@@ -184,6 +185,118 @@ transforms.set(["user1", "name"], value: .update("Alicia"))
 
 let updated = try outer.transform(transforms: transforms)
 // The nested dictionary gets a new CID, which changes the parent's CID
+```
+
+### Volumes (Data Locality for Content-Addressed Trees)
+
+#### The problem
+
+A Merkle DAG is location-agnostic by design. Every block is addressed by its content hash, and a `Fetcher` retrieves blocks one CID at a time. This is a strength — the same data can live on IPFS, a database, a filesystem, or a peer's memory — but it creates a blind spot: **the fetcher has no idea which blocks are related.**
+
+Consider a tree with 10,000 nodes. A naive resolver issues 10,000 independent `fetch(cid)` calls. Each one is a separate network request with its own peer lookup, connection setup, and round-trip. The fetcher has no way to know that all 10,000 blocks live under the same root and are probably stored together on the same peer. It can't batch, it can't pipeline, it can't route intelligently.
+
+This is the gap between content addressing (which identifies data) and data locality (which describes where data physically lives). Content addressing deliberately erases location. But when you need to actually retrieve data from a distributed network, location matters.
+
+#### What a Volume is
+
+A `Volume` is a `Header` subtype that marks a point in the Merkle DAG where a peer is likely to store the child blocks contiguously. It is a **data locality boundary** — a declaration that the subtree beneath this point forms a logical unit that peers advertise, replicate, and serve as a whole.
+
+When resolution enters a Volume, it calls `provide(rootCID:paths:)` on the fetcher before resolving any child blocks. This gives the fetcher two pieces of information:
+
+1. **The root CID** — the identity of the volume. A peer that advertises this CID likely has all the child blocks beneath it.
+2. **The resolution paths** — what the resolver is about to traverse. The fetcher can use this to prefetch, open a streaming session, or scope a query.
+
+The fetcher is free to act on this information however it wants — connect to a specific peer, warm a cache, open a multiplexed stream — or ignore it entirely. If the fetcher doesn't conform to `VolumeAwareFetcher`, nothing changes; the Volume resolves like any other Header.
+
+#### Why this lives in the Header, not the Node
+
+The CID is a property of the Header, not the Node. A Node doesn't know its own hash — it's computed from the Node's serialization and stored in the Header that wraps it. Since `provide` needs the CID, the interception point must be the Header.
+
+Making `Volume` a child protocol of `Header` (rather than `Node`) also means any Node type can be wrapped in a Volume without modification. A `MerkleDictionary`, a `MerkleArray`, a custom `Node` — they all work as the inner type. The data locality concern is separated from the data structure concern.
+
+#### Where this matters in practice
+
+**P2P retrieval (IPFS, Filecoin, BitTorrent).** A dataset is pinned by a storage provider. Without a Volume boundary, the resolver does independent DHT lookups for every block. With a Volume, the fetcher discovers the provider once and streams blocks from them directly. The difference is one DHT lookup vs. thousands.
+
+**Sharded databases.** A multi-tenant system stores each tenant's data under a separate root CID. When a request comes in for tenant X, the `provide` call tells the fetcher which shard to route to. Every subsequent `fetch` in that resolution goes to the right replica.
+
+**Edge caching and CDNs.** A CDN replicates entire volumes to edge nodes — a product catalog, a config store, a user directory. The `provide` call lets the fetcher check the local edge cache before falling back to origin. Without it, each block fetch independently checks the cache, missing the optimization of knowing they all belong to the same cached dataset.
+
+**Collaborative editing.** Each document is a volume. When a client opens a document, `provide` tells the fetcher to connect to the peer currently editing it (who has the latest blocks in memory), rather than pulling stale blocks from persistent storage.
+
+**Offline-first sync.** A mobile client syncs volumes, not individual blocks. The volume boundary tells the sync engine what to replicate as a unit. When the client comes back online, `provide` identifies which peer has the latest version of each volume.
+
+#### Nested Volumes
+
+Volumes can nest. Each boundary triggers its own `provide` call with its own CID, allowing the fetcher to locate different peers for different parts of the tree.
+
+This mirrors real data topology. A database (outer volume) contains tables (inner volumes). The database might live on a cluster, but each table is sharded to a specific node within that cluster. When resolution crosses the database boundary, the fetcher connects to the cluster. When it crosses a table boundary, the fetcher routes to the specific shard.
+
+```
+VolumeImpl<Database>           ← provide(databaseCID, ...) → connect to cluster
+  └─ Database
+       ├─ "users" → VolumeImpl<UserTable>    ← provide(usersCID, ...) → route to shard A
+       │    └─ UserTable (MerkleDictionary)
+       │         ├─ "alice" → ...
+       │         └─ "bob" → ...
+       └─ "logs" → VolumeImpl<LogTable>      ← provide(logsCID, ...) → route to shard B
+            └─ LogTable (MerkleArray)
+                 ├─ event_0
+                 └─ event_1
+```
+
+Each `provide` call gives the fetcher progressively more specific routing information. The fetcher can use the outer `provide` to establish a connection to the cluster and the inner `provide` to select a shard — or it can ignore nesting and treat each `provide` independently.
+
+#### Usage
+
+Mark a dataset boundary with `VolumeImpl`:
+
+```swift
+typealias UserVolume = VolumeImpl<MerkleDictionaryImpl<String>>
+
+var users = MerkleDictionaryImpl<String>()
+users = try users.inserting(key: "alice", value: "engineer")
+users = try users.inserting(key: "bob", value: "designer")
+
+let vol = UserVolume(node: users)
+try vol.storeRecursively(storer: myStore)
+```
+
+Resolve from a CID-only reference — the fetcher receives the volume boundary:
+
+```swift
+let resolved = try await UserVolume(rawCID: vol.rawCID)
+    .resolve(paths: paths, fetcher: myFetcher)
+```
+
+Implement `VolumeAwareFetcher` to act on the hint:
+
+```swift
+struct P2PFetcher: VolumeAwareFetcher {
+    func provide(rootCID: String, paths: ArrayTrie<ResolutionStrategy>) async throws {
+        // Look up which peer advertises this CID.
+        // Open a connection or streaming session to that peer.
+        // Subsequent fetch() calls can use this connection.
+    }
+
+    func fetch(rawCid: String) async throws -> Data {
+        // Fetch from the connected peer, or fall back to DHT.
+    }
+}
+```
+
+If the fetcher doesn't conform to `VolumeAwareFetcher`, the Volume resolves normally — `provide` is simply not called. This makes Volumes a zero-cost abstraction for fetchers that don't need locality hints.
+
+Nested volumes:
+
+```swift
+typealias InnerVolume = VolumeImpl<MerkleDictionaryImpl<String>>
+typealias OuterDict = MerkleDictionaryImpl<InnerVolume>
+typealias OuterVolume = VolumeImpl<OuterDict>
+
+// Resolving the outer volume calls provide(outerCID, ...)
+// When resolution descends into a child InnerVolume, it calls provide(innerCID, ...)
+// The fetcher gets two provide calls — one per volume boundary.
 ```
 
 ### MerkleArray
@@ -735,6 +848,8 @@ Build a transaction ledger and generate existence/insertion/deletion proofs. Pro
 | `Storer` | -- | Data persistence by CID. One method: `store(rawCid:data:) throws`. |
 | `KeyProvider` | -- | Key lookup by hash. One method: `key(for:) -> SymmetricKey?`. |
 | `KeyProvidingFetcher` | `Fetcher`, `KeyProvider` | Combined fetcher + key provider for resolving encrypted data. |
+| `Volume` | `Header` | Marks a point in the DAG where peers may store child blocks contiguously. Overrides resolve to call `provide` on the fetcher. |
+| `VolumeAwareFetcher` | `Fetcher` | Receives `provide(rootCID:paths:)` calls when resolution enters a `Volume`. |
 
 ### Enums
 
@@ -821,6 +936,7 @@ let diff = try await newHeader.diff(from: oldHeader, fetcher: myFetcher)
 | `RadixNodeImpl<V>` | Concrete `RadixNode` with JSON coding for `Character`-keyed children. |
 | `HeaderImpl<N>` | Generic `Header` wrapping any `Node` type. |
 | `RadixHeaderImpl<V>` | `RadixHeader` for `RadixNodeImpl<V>`. |
+| `VolumeImpl<N>` | Concrete `Volume` wrapping any `Node` type. |
 | `EncryptionInfo` | Metadata on an encrypted header (`keyHash` + `iv`). |
 
 ## Architecture
@@ -862,9 +978,13 @@ Node (base: Codable + LosslessStringConvertible + Sendable)
 
 Header (Codable + Sendable, wraps a Node with its CID + optional EncryptionInfo)
   |-- RadixHeader (Header constrained to RadixNode)
+  |-- Volume (marks a data locality boundary; notifies fetcher before resolving)
+
+Fetcher (Sendable, retrieves blocks by CID)
+  |-- VolumeAwareFetcher (receives provide(rootCID:paths:) when entering a Volume)
 ```
 
-Concrete implementations: `MerkleDictionaryImpl<V>`, `MerkleArrayImpl<V>`, `MerkleSetImpl`, `RadixNodeImpl<V>`, `HeaderImpl<N>`, `RadixHeaderImpl<V>`.
+Concrete implementations: `MerkleDictionaryImpl<V>`, `MerkleArrayImpl<V>`, `MerkleSetImpl`, `RadixNodeImpl<V>`, `HeaderImpl<N>`, `RadixHeaderImpl<V>`, `VolumeImpl<N>`.
 
 ### How the Trie Works
 
@@ -911,7 +1031,7 @@ Sources/cashew/
 swift test
 ```
 
-Tests cover resolution, transforms, proofs, headers, key enumeration, encryption, arrays, range query performance, and real-world scenarios.
+Tests cover resolution, transforms, proofs, headers, key enumeration, encryption, arrays, range query performance, volumes, and real-world scenarios.
 
 ## License
 
