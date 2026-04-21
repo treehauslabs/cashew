@@ -6,6 +6,9 @@ public extension Header {
         guard let node = node else {
             return
         }
+        if storer.contains(rawCid: rawCID) {
+            return
+        }
         let dataToStore: Data
         if let info = encryptionInfo {
             guard let keyProvider = storer as? KeyProvider else { throw DataErrors.keyNotFound }
