@@ -329,3 +329,183 @@ struct MultiLevelVolumeTests {
     }
 }
 
+// MARK: - Store → Fetch round-trip tests
+
+/// A VolumeAwareStorer that groups CIDs by Volume boundary, mirroring
+/// BrokerStorer's behavior. Each provide() seals the previous buffer
+/// into a volume-keyed dict. fetch() serves from the volume store.
+private final class VolumeGroupingStore: VolumeAwareStorer, @unchecked Sendable {
+    private let lock = NSLock()
+    private var activeRoot: String?
+    private var buffer: [String: Data] = [:]
+    private(set) var volumes: [String: [String: Data]] = [:]
+
+    var providedRoots: [String] {
+        lock.withLock { Array(volumes.keys) }
+    }
+
+    func provide(rootCID: String) throws {
+        lock.withLock {
+            if let root = activeRoot, !buffer.isEmpty {
+                volumes[root] = buffer
+            }
+            activeRoot = rootCID
+            buffer = [:]
+        }
+    }
+
+    func store(rawCid: String, data: Data) throws {
+        lock.withLock { buffer[rawCid] = data }
+    }
+
+    func contains(rawCid: String) -> Bool { false }
+
+    func seal() {
+        lock.withLock {
+            if let root = activeRoot, !buffer.isEmpty {
+                volumes[root] = buffer
+            }
+            activeRoot = nil
+            buffer = [:]
+        }
+    }
+
+    func allData() -> [String: Data] {
+        lock.withLock {
+            var all: [String: Data] = [:]
+            for (_, entries) in volumes { for (k, v) in entries { all[k] = v } }
+            return all
+        }
+    }
+}
+
+/// Fetcher that serves from a VolumeGroupingStore and records provide() calls.
+private final class VolumeGroupingFetcher: VolumeAwareFetcher, @unchecked Sendable {
+    private let store: VolumeGroupingStore
+    private let lock = NSLock()
+    private var cache: [String: Data] = [:]
+    private(set) var providedRoots: [String] = []
+
+    init(store: VolumeGroupingStore) { self.store = store }
+
+    func provide(rootCID: String, paths: ArrayTrie<ResolutionStrategy>) async throws {
+        lock.withLock {
+            providedRoots.append(rootCID)
+            if let entries = store.volumes[rootCID] {
+                for (k, v) in entries { cache[k] = v }
+            }
+        }
+    }
+
+    func fetch(rawCid: String) async throws -> Data {
+        if let data = lock.withLock({ cache[rawCid] }) { return data }
+        let all = store.allData()
+        if let data = all[rawCid] { return data }
+        throw FetchError.notFound
+    }
+}
+
+@Suite("Store → Fetch round-trip")
+struct VolumeRoundTripTests {
+
+    typealias Dict = VolumeMerkleDictionaryImpl<String>
+
+    @Test("Store and resolve a single-key dictionary round-trips correctly")
+    func singleKeyRoundTrip() async throws {
+        let dict = try Dict().inserting(key: "alice", value: "v1")
+        let outer = VolumeImpl(node: dict)
+
+        let store = VolumeGroupingStore()
+        try outer.storeRecursively(storer: store)
+        store.seal()
+
+        #expect(!store.volumes.isEmpty, "storeRecursively should produce at least one volume")
+        #expect(store.volumes[outer.rawCID] != nil, "outer Volume root should have its own volume group")
+
+        let stripped = VolumeImpl<Dict>(rawCID: outer.rawCID, node: nil, encryptionInfo: nil)
+        let fetcher = VolumeGroupingFetcher(store: store)
+        let resolved = try await stripped.resolveRecursive(fetcher: fetcher)
+
+        #expect(resolved.node != nil, "resolved node should not be nil")
+        let value = try resolved.node?.get(key: "alice")
+        #expect(value == "v1", "round-tripped value should match")
+    }
+
+    @Test("Store and resolve a branched dictionary round-trips all values")
+    func branchedRoundTrip() async throws {
+        let dict = try Dict()
+            .inserting(key: "alice", value: "v1")
+            .inserting(key: "alicia", value: "v2")
+            .inserting(key: "bob", value: "v3")
+        let outer = VolumeImpl(node: dict)
+
+        let store = VolumeGroupingStore()
+        try outer.storeRecursively(storer: store)
+        store.seal()
+
+        #expect(store.volumes.count >= 2, "branched trie should produce multiple volume groups")
+
+        let stripped = VolumeImpl<Dict>(rawCID: outer.rawCID, node: nil, encryptionInfo: nil)
+        let fetcher = VolumeGroupingFetcher(store: store)
+        let resolved = try await stripped.resolveRecursive(fetcher: fetcher)
+
+        #expect(try resolved.node?.get(key: "alice") == "v1")
+        #expect(try resolved.node?.get(key: "alicia") == "v2")
+        #expect(try resolved.node?.get(key: "bob") == "v3")
+    }
+
+    @Test("Store fires provide() at every Volume boundary during storeRecursively")
+    func storeFiresProvideAtBoundaries() throws {
+        let dict = try Dict()
+            .inserting(key: "alice", value: "v1")
+            .inserting(key: "bob", value: "v2")
+        let outer = VolumeImpl(node: dict)
+
+        let store = VolumeGroupingStore()
+        try outer.storeRecursively(storer: store)
+        store.seal()
+
+        #expect(store.volumes[outer.rawCID] != nil,
+                "provide() should fire for the outer Volume root during store")
+
+        var headerCIDs: Set<String> = []
+        try VolumeMerkleDictionaryTests.visitAllHeaders(in: dict) { header in
+            headerCIDs.insert(header.rawCID)
+        }
+        for cid in headerCIDs {
+            #expect(store.volumes[cid] != nil,
+                    "provide() should fire for internal header CID \(cid) during store")
+        }
+    }
+
+    @Test("4-level custom hierarchy round-trips through volume-grouped store")
+    func multiLevelRoundTrip() async throws {
+        let eng = Division(teams: [
+            "backend": VolumeImpl(node: try Dict()
+                .inserting(key: "alice", value: "lead")
+                .inserting(key: "bob", value: "senior")),
+        ])
+        let company = Company(divisions: [
+            "eng": VolumeImpl(node: eng),
+        ])
+        let root = VolumeImpl(node: company)
+
+        let store = VolumeGroupingStore()
+        try root.storeRecursively(storer: store)
+        store.seal()
+
+        #expect(store.volumes.count >= 3, "4-level hierarchy should produce multiple volume groups")
+
+        let stripped = VolumeImpl<Company>(rawCID: root.rawCID, node: nil, encryptionInfo: nil)
+        let fetcher = VolumeGroupingFetcher(store: store)
+        let resolved = try await stripped.resolveRecursive(fetcher: fetcher)
+
+        let engDiv = resolved.node?.divisions["eng"]
+        #expect(engDiv != nil, "eng division should resolve")
+        let backend = engDiv?.node?.teams["backend"]
+        #expect(backend != nil, "backend team should resolve")
+        let alice = try backend?.node?.get(key: "alice")
+        #expect(alice == "lead", "alice's value should round-trip correctly")
+    }
+}
+
