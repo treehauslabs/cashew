@@ -1,7 +1,6 @@
 public extension Volume {
     func storeRecursively(storer: Storer) throws {
         guard let node = node else { return }
-        if storer.contains(rawCid: rawCID) { return }
         if let volumeAware = storer as? VolumeAwareStorer {
             try volumeAware.provide(rootCID: rawCID)
         }
