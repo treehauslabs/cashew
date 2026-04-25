@@ -184,6 +184,32 @@ struct VolumeMerkleDictionaryTests {
     }
 }
 
+/// A node with both HeaderImpl (non-Volume) and VolumeImpl children.
+/// Mimics Block's structure where `spec` is HeaderImpl and `frontier` is VolumeImpl.
+private struct MixedNode: Node, Sendable {
+    typealias Dict = VolumeMerkleDictionaryImpl<String>
+    let label: HeaderImpl<Dict>
+    let data: VolumeImpl<Dict>
+
+    static let LABEL = "label"
+    static let DATA = "data"
+
+    func properties() -> Set<String> { [Self.LABEL, Self.DATA] }
+    func get(property: String) -> (any Header)? {
+        switch property {
+        case Self.LABEL: return label
+        case Self.DATA: return data
+        default: return nil
+        }
+    }
+    func set(properties: [String: any Header]) -> MixedNode {
+        MixedNode(
+            label: properties[Self.LABEL] as? HeaderImpl<Dict> ?? label,
+            data: properties[Self.DATA] as? VolumeImpl<Dict> ?? data
+        )
+    }
+}
+
 // MARK: - Multi-level Volume hierarchy with custom nodes
 
 /// A division of a company. Its `teams` are each their own Volume, so a
@@ -476,6 +502,31 @@ struct VolumeRoundTripTests {
             #expect(store.volumes[cid] != nil,
                     "provide() should fire for internal header CID \(cid) during store")
         }
+    }
+
+    @Test("Non-Volume children are stored inside enclosing Volume's group, not lost")
+    func nonVolumeChildrenInEnclosingVolume() throws {
+        // MixedNode has both a HeaderImpl child (plain) and a VolumeImpl child.
+        // With Set iteration, the Volume child might be visited first, sealing
+        // the parent's buffer before the HeaderImpl child is stored.
+        // The fix in Node+store.swift stores non-Volume children first.
+        let store = VolumeGroupingStore()
+        let labelDict = try VolumeMerkleDictionaryImpl<String>().inserting(key: "name", value: "test")
+        let dataDict = VolumeMerkleDictionaryImpl<String>()
+        let mixed = MixedNode(
+            label: HeaderImpl(node: labelDict),
+            data: VolumeImpl(node: dataDict)
+        )
+        let root = VolumeImpl(node: mixed)
+        try root.storeRecursively(storer: store)
+        store.seal()
+
+        let rootVolume = store.volumes[root.rawCID]
+        #expect(rootVolume != nil, "root volume should exist")
+
+        let labelCID = mixed.label.rawCID
+        #expect(rootVolume?[labelCID] != nil,
+                "HeaderImpl child (label) must be stored inside the enclosing Volume's group, not lost when a sibling Volume boundary seals the buffer first")
     }
 
     @Test("4-level custom hierarchy round-trips through volume-grouped store")
