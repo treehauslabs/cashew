@@ -134,7 +134,7 @@ struct VolumeMerkleDictionaryTests {
             lock.withLock { _providedRoots }
         }
 
-        func provide(rootCID: String, paths: ArrayTrie<ResolutionStrategy>) async throws {
+        func enterVolume(rootCID: String, paths: ArrayTrie<ResolutionStrategy>) async throws {
             lock.withLock { _providedRoots.append(rootCID) }
         }
 
@@ -370,7 +370,7 @@ private final class VolumeGroupingStore: VolumeAwareStorer, @unchecked Sendable 
         lock.withLock { Array(volumes.keys) }
     }
 
-    func provide(rootCID: String) throws {
+    func enterVolume(rootCID: String) throws {
         lock.withLock {
             if let root = activeRoot, !buffer.isEmpty {
                 volumes[root] = buffer
@@ -414,7 +414,7 @@ private final class VolumeGroupingFetcher: VolumeAwareFetcher, @unchecked Sendab
 
     init(store: VolumeGroupingStore) { self.store = store }
 
-    func provide(rootCID: String, paths: ArrayTrie<ResolutionStrategy>) async throws {
+    func enterVolume(rootCID: String, paths: ArrayTrie<ResolutionStrategy>) async throws {
         lock.withLock {
             providedRoots.append(rootCID)
             if let entries = store.volumes[rootCID] {
@@ -527,6 +527,30 @@ struct VolumeRoundTripTests {
         let labelCID = mixed.label.rawCID
         #expect(rootVolume?[labelCID] != nil,
                 "HeaderImpl child (label) must be stored inside the enclosing Volume's group, not lost when a sibling Volume boundary seals the buffer first")
+    }
+
+    @Test("Every VolumeRadixHeader in a VolumeMerkleDictionary gets its own volume root")
+    func radixHeadersAreVolumeRoots() throws {
+        let dict = try VolumeMerkleDictionaryImpl<String>()
+            .inserting(key: "alice", value: "100")
+            .inserting(key: "bob", value: "200")
+
+        let outer = VolumeImpl(node: dict)
+        let store = VolumeGroupingStore()
+        try outer.storeRecursively(storer: store)
+        store.seal()
+
+        #expect(store.volumes[outer.rawCID] != nil, "outer VolumeImpl must be a volume root")
+
+        var allHeaderCIDs: Set<String> = []
+        try VolumeMerkleDictionaryTests.visitAllHeaders(in: dict) { header in
+            allHeaderCIDs.insert(header.rawCID)
+        }
+
+        for cid in allHeaderCIDs {
+            #expect(store.volumes[cid] != nil,
+                    "VolumeRadixHeader \(String(cid.prefix(16)))… must have its own volume root — missing means provide() never fired during store")
+        }
     }
 
     @Test("4-level custom hierarchy round-trips through volume-grouped store")

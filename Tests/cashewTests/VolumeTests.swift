@@ -14,7 +14,7 @@ final class VolumeTestFetcher: VolumeAwareFetcher, Storer, @unchecked Sendable {
         lock.withLock { _provideCalls }
     }
 
-    func provide(rootCID: String, paths: ArrayTrie<ResolutionStrategy>) async throws {
+    func enterVolume(rootCID: String, paths: ArrayTrie<ResolutionStrategy>) async throws {
         lock.withLock {
             _provideCalls.append((rootCID: rootCID, paths: paths))
         }
