@@ -29,6 +29,9 @@ public extension Volume {
             var paths = ArrayTrie<ResolutionStrategy>()
             paths.set([], value: .targeted)
             try await vaf.enterVolume(rootCID: rawCID, paths: paths)
+            let result = try await resolveNode(fetcher: fetcher)
+            await vaf.exitVolume(rootCID: rawCID)
+            return result
         }
         return try await resolveNode(fetcher: fetcher)
     }
