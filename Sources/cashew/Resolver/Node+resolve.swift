@@ -6,6 +6,9 @@ public extension Node {
             for property in properties() {
                 group.addTask {
                     guard let address = get(property: property) else { throw ResolutionErrors.typeError("missing property during resolution") }
+                    if let volume = address as? any Volume {
+                        return (property, try await volume.resolveRecursive(fetcher: fetcher))
+                    }
                     let resolved = try await address.resolveRecursive(fetcher: fetcher)
                     return (property, resolved)
                 }
@@ -28,15 +31,24 @@ public extension Node {
                     guard let address = get(property: property) else { return nil }
 
                     if paths.get([property]) == .recursive {
+                        if let volume = address as? any Volume {
+                            return (property, try await volume.resolveRecursive(fetcher: fetcher))
+                        }
                         let resolved = try await address.resolveRecursive(fetcher: fetcher)
                         return (property, resolved)
                     }
                     else if let nextPaths = paths.traverse([property]) {
                         if !nextPaths.isEmpty {
+                            if let volume = address as? any Volume {
+                                return (property, try await volume.resolve(paths: nextPaths, fetcher: fetcher))
+                            }
                             let resolved = try await address.resolve(paths: nextPaths, fetcher: fetcher)
                             return (property, resolved)
                         }
                         else if paths.get([property]) == .targeted {
+                            if let volume = address as? any Volume {
+                                return (property, try await volume.resolve(fetcher: fetcher))
+                            }
                             let resolved = try await address.resolve(fetcher: fetcher)
                             return (property, resolved)
                         }

@@ -11,6 +11,9 @@ public extension RadixNode {
             guard let traversalPaths = paths.traverse(path: prefix) else { return self }
             let newProperties = try await resolveChildrenConcurrently { property in
                 if let propertyTraversal = traversalPaths.traverseChild(property.first!) {
+                    if let vrh = getChildAsVolume(property: property) {
+                        return try await vrh.resolve(paths: propertyTraversal, fetcher: fetcher) as! ChildType
+                    }
                     return try await getChild(property: property).resolve(paths: propertyTraversal, fetcher: fetcher)
                 } else {
                     return getChild(property: property)
@@ -61,7 +64,10 @@ public extension RadixNode {
 
     func resolveRecursiveCommon(fetcher: Fetcher) async throws -> Self {
         let newProperties = try await resolveChildrenConcurrently { property in
-            try await getChild(property: property).resolveRecursive(fetcher: fetcher)
+            if let vrh = getChildAsVolume(property: property) {
+                return try await vrh.resolveRecursive(fetcher: fetcher) as! ChildType
+            }
+            return try await getChild(property: property).resolveRecursive(fetcher: fetcher)
         }
         return set(properties: newProperties)
     }
@@ -106,7 +112,10 @@ public extension RadixNode {
         let capturedTraversalPaths = traversalPaths
         let capturedFinalNextPaths = finalNextPaths
         let newProperties = try await resolveChildrenConcurrently { property in
-            try await getChild(property: property).resolveList(paths: capturedTraversalPaths?.traverseChild(property.first!), nextPaths: capturedFinalNextPaths, fetcher: fetcher)
+            if let vrh = getChildAsVolume(property: property) {
+                return try await vrh.resolveList(paths: capturedTraversalPaths?.traverseChild(property.first!), nextPaths: capturedFinalNextPaths, fetcher: fetcher) as! ChildType
+            }
+            return try await getChild(property: property).resolveList(paths: capturedTraversalPaths?.traverseChild(property.first!), nextPaths: capturedFinalNextPaths, fetcher: fetcher)
         }
 
         let resolved = set(properties: newProperties)
@@ -128,6 +137,10 @@ public extension RadixNode {
             return Self(prefix: resolved.prefix, value: newValue, children: resolved.children)
         }
         return resolved
+    }
+
+    func getChildAsVolume(property: PathSegment) -> (any VolumeRadixHeader)? {
+        getChild(property: property) as? any VolumeRadixHeader
     }
 
     private func resolveChildrenConcurrently(_ resolve: @Sendable @escaping (PathSegment) async throws -> ChildType) async throws -> [Character: ChildType] {

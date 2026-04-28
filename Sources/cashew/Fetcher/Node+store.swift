@@ -11,7 +11,11 @@ public extension Node {
             }
         }
         for (_, header) in volumes {
-            try header.storeRecursively(storer: storer)
+            if let vrh = header as? any VolumeRadixHeader {
+                try vrh.storeRecursively(storer: storer)
+            } else {
+                try (header as! any Volume).storeRecursively(storer: storer)
+            }
         }
     }
 }
