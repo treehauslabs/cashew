@@ -33,6 +33,9 @@ public struct RadixHeaderImpl<Value>: RadixHeader where Value: Codable, Value: S
     }
 }
 
+extension RadixHeaderImpl: Volume { }
+extension RadixHeaderImpl: VolumeRadixHeader { }
+
 // MARK: - Codable
 extension RadixHeaderImpl: Codable {
     enum CodingKeys: String, CodingKey {

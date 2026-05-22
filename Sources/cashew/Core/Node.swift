@@ -48,22 +48,31 @@ private let sharedJSONEncoder: JSONEncoder = {
 
 public extension Node {
     init?(data: Data) {
-       guard let decoded = try? sharedJSONDecoder.decode(Self.self, from: data) else { return nil }
-       self = decoded
+       if let decoded = try? DagCBOR.decode(Self.self, from: data) {
+           self = decoded
+       } else if let decoded = try? sharedJSONDecoder.decode(Self.self, from: data) {
+           self = decoded
+       } else {
+           return nil
+       }
     }
-    
+
     func toData() -> Data? {
+        return try? DagCBOR.encode(self)
+    }
+
+    func toJSON() -> Data? {
         return try? sharedJSONEncoder.encode(self)
     }
-    
+
     init?(_ description: String) {
         guard let data = description.data(using: .utf8) else { return nil }
         guard let newNode = Self(data: data) else { return nil }
         self = newNode
     }
-    
+
     var description: String {
-        guard let data = toData() else { return "" }
+        guard let data = toJSON() else { return "" }
         return String(decoding: data, as: UTF8.self)
     }
 }

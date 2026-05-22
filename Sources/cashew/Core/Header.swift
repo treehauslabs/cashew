@@ -75,7 +75,7 @@ public extension Header {
         self = Self(rawCID: Self.createSyncCID(for: node, codec: codec), node: node, encryptionInfo: nil)
     }
 
-    static var defaultCodec: Codecs { .dag_json }
+    static var defaultCodec: Codecs { .dag_cbor }
 
     static func create(node: NodeType, codec: Codecs = defaultCodec) async throws -> Self {
         let cid = try computeCID(for: node, codec: codec)

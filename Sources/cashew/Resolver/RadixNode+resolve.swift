@@ -144,14 +144,29 @@ public extension RadixNode {
     }
 
     private func resolveChildrenConcurrently(_ resolve: @Sendable @escaping (PathSegment) async throws -> ChildType) async throws -> [Character: ChildType] {
-        try await withThrowingTaskGroup(of: (Character, ChildType).self) { group in
-            for property in properties() {
+        let props = Array(properties())
+        // Sequential fast-path: for ≤2 children, task creation overhead exceeds
+        // the benefit of parallelism. Targeted resolutions (the common case for
+        // block validation and state proofs) typically traverse a single branch
+        // at each node, hitting this path almost exclusively.
+        if props.count <= 2 {
+            var result = [Character: ChildType]()
+            result.reserveCapacity(props.count)
+            for prop in props {
+                result[prop.first!] = try await resolve(prop)
+            }
+            return result
+        }
+        // Parallel path for nodes with many children (list/recursive resolution).
+        return try await withThrowingTaskGroup(of: (Character, ChildType).self) { group in
+            for prop in props {
                 group.addTask {
-                    let resolved = try await resolve(property)
-                    return (property.first!, resolved)
+                    let resolved = try await resolve(prop)
+                    return (prop.first!, resolved)
                 }
             }
             var result = [Character: ChildType]()
+            result.reserveCapacity(props.count)
             for try await (key, value) in group {
                 result[key] = value
             }

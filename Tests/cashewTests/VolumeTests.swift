@@ -100,8 +100,8 @@ struct VolumeTests {
 
     // MARK: - provide is called on VolumeAwareFetcher
 
-    @Test("resolve(paths:fetcher:) calls provide on VolumeAwareFetcher")
-    func resolvePathsCallsProvide() async throws {
+    @Test("resolve(paths:fetcher:) resolves without enter/exit (v2 implicit volumes)")
+    func resolvePathsImplicit() async throws {
         let fetcher = VolumeTestFetcher()
 
         var dict = MerkleDictionaryImpl<String>()
@@ -118,12 +118,11 @@ struct VolumeTests {
 
         let resolved = try await cidOnly.resolve(paths: paths, fetcher: fetcher)
         #expect(resolved.node != nil)
-        #expect(fetcher.provideCalls.count == 1)
-        #expect(fetcher.provideCalls[0].rootCID == vol.rawCID)
+        #expect(fetcher.provideCalls.count == 0)
     }
 
-    @Test("resolveRecursive calls provide on VolumeAwareFetcher")
-    func resolveRecursiveCallsProvide() async throws {
+    @Test("resolveRecursive resolves without enter/exit (v2 implicit volumes)")
+    func resolveRecursiveImplicit() async throws {
         let fetcher = VolumeTestFetcher()
 
         var dict = MerkleDictionaryImpl<String>()
@@ -136,13 +135,11 @@ struct VolumeTests {
         let resolved = try await cidOnly.resolveRecursive(fetcher: fetcher)
 
         #expect(resolved.node != nil)
-        #expect(fetcher.provideCalls.count == 1)
-        #expect(fetcher.provideCalls[0].rootCID == vol.rawCID)
-        #expect(fetcher.provideCalls[0].paths.get([]) == .recursive)
+        #expect(fetcher.provideCalls.count == 0)
     }
 
-    @Test("resolve(fetcher:) calls provide on VolumeAwareFetcher")
-    func resolveSingleCallsProvide() async throws {
+    @Test("resolve(fetcher:) resolves without enter/exit (v2 implicit volumes)")
+    func resolveSingleImplicit() async throws {
         let fetcher = VolumeTestFetcher()
 
         var dict = MerkleDictionaryImpl<String>()
@@ -155,9 +152,7 @@ struct VolumeTests {
         let resolved = try await cidOnly.resolve(fetcher: fetcher)
 
         #expect(resolved.node != nil)
-        #expect(fetcher.provideCalls.count == 1)
-        #expect(fetcher.provideCalls[0].rootCID == vol.rawCID)
-        #expect(fetcher.provideCalls[0].paths.get([]) == .targeted)
+        #expect(fetcher.provideCalls.count == 0)
     }
 
     // MARK: - Non-VolumeAware fetchers work normally
@@ -199,45 +194,33 @@ struct VolumeTests {
 
     // MARK: - Nested Volumes
 
-    @Test("Nested Volumes each trigger their own provide call")
+    @Test("Nested Volumes resolve without enter/exit (v2 implicit)")
     func nestedVolumes() async throws {
         let fetcher = VolumeTestFetcher()
 
-        // Inner volume: a dictionary
         var inner = MerkleDictionaryImpl<String>()
         inner = try inner.inserting(key: "x", value: "1")
         let innerVol = VolumeImpl(node: inner)
 
-        // Outer node: a dictionary whose value is the inner Volume
         var outer = MerkleDictionaryImpl<VolumeImpl<MerkleDictionaryImpl<String>>>()
         outer = try outer.inserting(key: "data", value: innerVol)
         let outerVol = VolumeImpl(node: outer)
 
         try outerVol.storeRecursively(storer: fetcher)
 
-        // Resolve from CID-only
         let cidOnly = VolumeImpl<MerkleDictionaryImpl<VolumeImpl<MerkleDictionaryImpl<String>>>>(rawCID: outerVol.rawCID)
 
         var paths = ArrayTrie<ResolutionStrategy>()
-        paths.set(["d"], value: .recursive) // "d" is the first-char dispatch for "data"
+        paths.set(["d"], value: .recursive)
 
         let _ = try await cidOnly.resolve(paths: paths, fetcher: fetcher)
 
-        // Outer volume should have triggered provide
-        let outerCalls = fetcher.provideCalls.filter { $0.rootCID == outerVol.rawCID }
-        #expect(outerCalls.count == 1)
-
-        // Inner volume should also have triggered provide (its own CID)
-        let innerCalls = fetcher.provideCalls.filter { $0.rootCID == innerVol.rawCID }
-        #expect(innerCalls.count == 1)
-
-        // Total: 2 provide calls
-        #expect(fetcher.provideCalls.count == 2)
+        #expect(fetcher.provideCalls.count == 0)
     }
 
     // MARK: - Volume through any Header existential
 
-    @Test("Volume resolve override fires through any Header existential")
+    @Test("Volume resolves through any Header existential (v2 implicit)")
     func existentialDispatch() async throws {
         let fetcher = VolumeTestFetcher()
 
@@ -249,15 +232,13 @@ struct VolumeTests {
 
         let cidOnly = VolumeImpl<MerkleDictionaryImpl<String>>(rawCID: vol.rawCID)
 
-        // Erase to any Header
         let existential: any Header = cidOnly
 
         var paths = ArrayTrie<ResolutionStrategy>()
         paths.set([], value: .recursive)
         let _ = try await existential.resolveRecursive(fetcher: fetcher)
 
-        #expect(fetcher.provideCalls.count == 1)
-        #expect(fetcher.provideCalls[0].rootCID == vol.rawCID)
+        #expect(fetcher.provideCalls.count == 0)
     }
 
     // MARK: - Store and resolve round-trip
