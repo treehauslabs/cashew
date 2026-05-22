@@ -70,6 +70,7 @@ extension HeaderImpl: Codable where NodeType: Codable {
 // correct dispatch — Volume-aware storage when the storer supports it.
 extension HeaderImpl {
     public func storeRecursively(storer: Storer) throws {
+        print("HEADERIMPL.storeRecursively cid=\(rawCID.prefix(12)) nodeNil=\(node == nil) isVol=\(self is any Volume)")
         guard let node = node else { return }
         if storer.contains(rawCid: rawCID) { return }
         let dataToStore: Data
