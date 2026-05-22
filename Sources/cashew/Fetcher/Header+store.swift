@@ -3,6 +3,7 @@ import Crypto
 
 public extension Header {
     func storeRecursively(storer: Storer) throws {
+        print("HEADER STORE: \(rawCID.prefix(12)) isVol=\(self is any Volume) nodeNil=\(node == nil)")
         guard let node = node else {
             return
         }
