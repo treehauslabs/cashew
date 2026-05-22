@@ -70,7 +70,6 @@ extension HeaderImpl: Codable where NodeType: Codable {
 // correct dispatch — Volume-aware storage when the storer supports it.
 extension HeaderImpl {
     public func storeRecursively(storer: Storer) throws {
-        print("HEADERIMPL.storeRecursively cid=\(rawCID.prefix(12)) nodeNil=\(node == nil) isVol=\(self is any Volume)")
         guard let node = node else { return }
         if storer.contains(rawCid: rawCID) { return }
         let dataToStore: Data
@@ -85,19 +84,12 @@ extension HeaderImpl {
             guard let nodeData = node.toData() else { throw DataErrors.serializationFailed }
             dataToStore = nodeData
         }
-        let isVolumeAware = storer is any VolumeAwareStorer
-        print("HEADERIMPL: isVol=\(self is any Volume) isVolumeAware=\(isVolumeAware) contains=\(storer.contains(rawCid:rawCID))")
         if self is any Volume, let volumeAware = storer as? VolumeAwareStorer {
-            print("HEADERIMPL: VOLUME PATH enterVolume \(rawCID.prefix(12))")
             try volumeAware.enterVolume(rootCID: rawCID)
             try volumeAware.store(rawCid: rawCID, data: dataToStore)
-            print("HEADERIMPL: stored \(rawCID.prefix(12)) data.count=\(dataToStore.count)")
             try node.storeRecursively(storer: volumeAware)
-            print("HEADERIMPL: about to exitVolume \(rawCID.prefix(12))")
             try volumeAware.exitVolume(rootCID: rawCID)
-            print("HEADERIMPL: exited \(rawCID.prefix(12))")
         } else {
-            print("HEADERIMPL: FLAT PATH store \(rawCID.prefix(12))")
             try storer.store(rawCid: rawCID, data: dataToStore)
             try node.storeRecursively(storer: storer)
         }

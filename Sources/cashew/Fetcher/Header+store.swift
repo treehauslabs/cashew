@@ -3,14 +3,12 @@ import Crypto
 
 public extension Header {
     func storeRecursively(storer: Storer) throws {
-        print("HEADER STORE: \(rawCID.prefix(12)) isVol=\(self is any Volume) nodeNil=\(node == nil)")
         guard let node = node else {
             return
         }
-        let alreadyContains = storer.contains(rawCid: rawCID)
-        let isVol = self is any Volume
-        if alreadyContains && isVol { print("SKIP-VOLUME: \(rawCID.prefix(12)) isVol=\(isVol)") }
-        if alreadyContains { return }
+        if storer.contains(rawCid: rawCID) {
+            return
+        }
         let dataToStore: Data
         if let info = encryptionInfo {
             guard let keyProvider = storer as? KeyProvider else { throw DataErrors.keyNotFound }
@@ -23,13 +21,8 @@ public extension Header {
             guard let nodeData = node.toData() else { throw DataErrors.serializationFailed }
             dataToStore = nodeData
         }
-        let isVolume = self is any Volume
-        let isVolumeAware = storer is any VolumeAwareStorer
-        if isVolume && isVolumeAware { print("DEBUG VOLUME STORE: \(rawCID.prefix(12))") }
         // If this Header is also a Volume and the storer is VolumeAware, use enter/exit
-        // scope management so sub-volumes are stored under their own roots. Calling
-        // through `any Header` bypasses the Volume+store.swift override (Swift existential
-        // dispatch limitation), so we check the runtime type here instead.
+        // scope management so sub-volumes are stored under their own roots.
         if self is any Volume, let volumeAware = storer as? VolumeAwareStorer {
             try volumeAware.enterVolume(rootCID: rawCID)
             try volumeAware.store(rawCid: rawCID, data: dataToStore)
