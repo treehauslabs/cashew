@@ -6,9 +6,10 @@ public extension Header {
         guard let node = node else {
             return
         }
-        if storer.contains(rawCid: rawCID) {
-            return
-        }
+        let alreadyContains = storer.contains(rawCid: rawCID)
+        let isVol = self is any Volume
+        if alreadyContains && isVol { print("SKIP-VOLUME: \(rawCID.prefix(12)) isVol=\(isVol)") }
+        if alreadyContains { return }
         let dataToStore: Data
         if let info = encryptionInfo {
             guard let keyProvider = storer as? KeyProvider else { throw DataErrors.keyNotFound }
