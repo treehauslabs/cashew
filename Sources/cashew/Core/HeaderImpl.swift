@@ -62,6 +62,40 @@ extension HeaderImpl: Codable where NodeType: Codable {
 }
 
 
+// Explicit implementation to resolve Swift protocol dispatch ambiguity:
+// `HeaderImpl` conforms to both `Header` and `Volume` (via retroactive
+// extension), but the compiler cannot reliably choose between
+// `Header+store.swift` and `Volume+store.swift` protocol extension defaults.
+// Providing the implementation directly on the concrete type guarantees
+// correct dispatch — Volume-aware storage when the storer supports it.
+extension HeaderImpl {
+    public func storeRecursively(storer: Storer) throws {
+        guard let node = node else { return }
+        if storer.contains(rawCid: rawCID) { return }
+        let dataToStore: Data
+        if let info = encryptionInfo {
+            guard let keyProvider = storer as? KeyProvider else { throw DataErrors.keyNotFound }
+            guard let key = keyProvider.key(for: info.keyHash) else { throw DataErrors.keyNotFound }
+            guard let ivData = info.ivData else { throw DataErrors.invalidIV }
+            let nonce = try AES.GCM.Nonce(data: ivData)
+            let plaintext = try Self.serializeNode(node, codec: Self.defaultCodec)
+            dataToStore = try EncryptionHelper.encrypt(data: plaintext, key: key, nonce: nonce)
+        } else {
+            guard let nodeData = node.toData() else { throw DataErrors.serializationFailed }
+            dataToStore = nodeData
+        }
+        if self is any Volume, let volumeAware = storer as? VolumeAwareStorer {
+            try volumeAware.enterVolume(rootCID: rawCID)
+            try volumeAware.store(rawCid: rawCID, data: dataToStore)
+            try node.storeRecursively(storer: volumeAware)
+            try volumeAware.exitVolume(rootCID: rawCID)
+        } else {
+            try storer.store(rawCid: rawCID, data: dataToStore)
+            try node.storeRecursively(storer: storer)
+        }
+    }
+}
+
 /// Heap-allocated wrapper that lets value-type ``Header`` structs hold a
 /// potentially large ``Node`` by reference, avoiding repeated copies.
 public final class Box<T: Sendable>: Sendable {
