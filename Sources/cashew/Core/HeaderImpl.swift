@@ -91,8 +91,11 @@ extension HeaderImpl {
             print("HEADERIMPL: VOLUME PATH enterVolume \(rawCID.prefix(12))")
             try volumeAware.enterVolume(rootCID: rawCID)
             try volumeAware.store(rawCid: rawCID, data: dataToStore)
+            print("HEADERIMPL: stored \(rawCID.prefix(12)) data.count=\(dataToStore.count)")
             try node.storeRecursively(storer: volumeAware)
+            print("HEADERIMPL: about to exitVolume \(rawCID.prefix(12))")
             try volumeAware.exitVolume(rootCID: rawCID)
+            print("HEADERIMPL: exited \(rawCID.prefix(12))")
         } else {
             print("HEADERIMPL: FLAT PATH store \(rawCID.prefix(12))")
             try storer.store(rawCid: rawCID, data: dataToStore)
