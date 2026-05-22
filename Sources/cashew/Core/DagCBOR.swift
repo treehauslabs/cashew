@@ -191,7 +191,11 @@ public struct DagCBOR {
         case is NSNull:
             output.append(0xf6)
         case let number as NSNumber:
-            if CFGetTypeID(number) == CFBooleanGetTypeID() {
+            // Distinguish Bool from numeric NSNumber using the ObjC type encoding.
+            // Swift Foundation encodes Bool-backed NSNumber as "B" on both Apple
+            // and Linux. CFGetTypeID works too but requires CoreFoundation (Darwin-only).
+            let isBool = String(cString: number.objCType) == "B"
+            if isBool {
                 output.append(number.boolValue ? 0xf5 : 0xf4)
             } else if isInteger(number) {
                 let int64 = number.int64Value
