@@ -21,6 +21,9 @@ public extension Header {
             guard let nodeData = node.toData() else { throw DataErrors.serializationFailed }
             dataToStore = nodeData
         }
+        let isVolume = self is any Volume
+        let isVolumeAware = storer is any VolumeAwareStorer
+        if isVolume && isVolumeAware { print("DEBUG VOLUME STORE: \(rawCID.prefix(12))") }
         // If this Header is also a Volume and the storer is VolumeAware, use enter/exit
         // scope management so sub-volumes are stored under their own roots. Calling
         // through `any Header` bypasses the Volume+store.swift override (Swift existential
