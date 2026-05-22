@@ -85,12 +85,16 @@ extension HeaderImpl {
             guard let nodeData = node.toData() else { throw DataErrors.serializationFailed }
             dataToStore = nodeData
         }
+        let isVolumeAware = storer is any VolumeAwareStorer
+        print("HEADERIMPL: isVol=\(self is any Volume) isVolumeAware=\(isVolumeAware) contains=\(storer.contains(rawCid:rawCID))")
         if self is any Volume, let volumeAware = storer as? VolumeAwareStorer {
+            print("HEADERIMPL: VOLUME PATH enterVolume \(rawCID.prefix(12))")
             try volumeAware.enterVolume(rootCID: rawCID)
             try volumeAware.store(rawCid: rawCID, data: dataToStore)
             try node.storeRecursively(storer: volumeAware)
             try volumeAware.exitVolume(rootCID: rawCID)
         } else {
+            print("HEADERIMPL: FLAT PATH store \(rawCID.prefix(12))")
             try storer.store(rawCid: rawCID, data: dataToStore)
             try node.storeRecursively(storer: storer)
         }
