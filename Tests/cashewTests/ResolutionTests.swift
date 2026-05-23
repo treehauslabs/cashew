@@ -1948,3 +1948,4 @@ struct ConcurrentResolutionTests {
         }
     }
 }
+

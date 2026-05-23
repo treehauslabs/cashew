@@ -36,6 +36,39 @@ public struct RadixHeaderImpl<Value>: RadixHeader where Value: Codable, Value: S
 extension RadixHeaderImpl: Volume { }
 extension RadixHeaderImpl: VolumeRadixHeader { }
 
+// Explicit storeRecursively to resolve Swift protocol dispatch ambiguity.
+// RadixHeaderImpl conforms to both Header and Volume; without this the
+// compiler may dispatch to Volume+store.swift, which ignores encryptionInfo
+// and stores plain bytes at an encrypted CID — causing authenticationFailure
+// on the subsequent decrypt during resolve. Mirrors HeaderImpl's explicit impl.
+extension RadixHeaderImpl {
+    public func storeRecursively(storer: Storer) throws {
+        guard let node = node else { return }
+        if storer.contains(rawCid: rawCID) { return }
+        let dataToStore: Data
+        if let info = encryptionInfo {
+            guard let keyProvider = storer as? KeyProvider else { throw DataErrors.keyNotFound }
+            guard let key = keyProvider.key(for: info.keyHash) else { throw DataErrors.keyNotFound }
+            guard let ivData = info.ivData else { throw DataErrors.invalidIV }
+            let nonce = try AES.GCM.Nonce(data: ivData)
+            let plaintext = try Self.serializeNode(node, codec: Self.defaultCodec)
+            dataToStore = try EncryptionHelper.encrypt(data: plaintext, key: key, nonce: nonce)
+        } else {
+            guard let nodeData = node.toData() else { throw DataErrors.serializationFailed }
+            dataToStore = nodeData
+        }
+        if self is any Volume, let volumeAware = storer as? VolumeAwareStorer {
+            try volumeAware.enterVolume(rootCID: rawCID)
+            try volumeAware.store(rawCid: rawCID, data: dataToStore)
+            try node.storeRecursively(storer: volumeAware)
+            try volumeAware.exitVolume(rootCID: rawCID)
+        } else {
+            try storer.store(rawCid: rawCID, data: dataToStore)
+            try node.storeRecursively(storer: storer)
+        }
+    }
+}
+
 // MARK: - Codable
 extension RadixHeaderImpl: Codable {
     enum CodingKeys: String, CodingKey {

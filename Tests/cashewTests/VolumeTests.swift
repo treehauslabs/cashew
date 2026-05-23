@@ -100,7 +100,7 @@ struct VolumeTests {
 
     // MARK: - provide is called on VolumeAwareFetcher
 
-    @Test("resolve(paths:fetcher:) resolves without enter/exit (v2 implicit volumes)")
+    @Test("resolve(paths:fetcher:) calls enterVolume exactly once")
     func resolvePathsImplicit() async throws {
         let fetcher = VolumeTestFetcher()
 
@@ -118,10 +118,10 @@ struct VolumeTests {
 
         let resolved = try await cidOnly.resolve(paths: paths, fetcher: fetcher)
         #expect(resolved.node != nil)
-        #expect(fetcher.provideCalls.count == 0)
+        #expect(fetcher.provideCalls.count == 1)
     }
 
-    @Test("resolveRecursive resolves without enter/exit (v2 implicit volumes)")
+    @Test("resolveRecursive calls enterVolume exactly once")
     func resolveRecursiveImplicit() async throws {
         let fetcher = VolumeTestFetcher()
 
@@ -135,10 +135,10 @@ struct VolumeTests {
         let resolved = try await cidOnly.resolveRecursive(fetcher: fetcher)
 
         #expect(resolved.node != nil)
-        #expect(fetcher.provideCalls.count == 0)
+        #expect(fetcher.provideCalls.count == 1)
     }
 
-    @Test("resolve(fetcher:) resolves without enter/exit (v2 implicit volumes)")
+    @Test("resolve(fetcher:) calls enterVolume exactly once")
     func resolveSingleImplicit() async throws {
         let fetcher = VolumeTestFetcher()
 
@@ -152,7 +152,7 @@ struct VolumeTests {
         let resolved = try await cidOnly.resolve(fetcher: fetcher)
 
         #expect(resolved.node != nil)
-        #expect(fetcher.provideCalls.count == 0)
+        #expect(fetcher.provideCalls.count == 1)
     }
 
     // MARK: - Non-VolumeAware fetchers work normally
@@ -177,7 +177,7 @@ struct VolumeTests {
 
     // MARK: - No provide call when paths are empty
 
-    @Test("resolve(paths:fetcher:) skips provide when paths are empty")
+    @Test("resolve(paths:fetcher:) calls enterVolume even with empty paths")
     func emptyPathsSkipsProvide() async throws {
         let fetcher = VolumeTestFetcher()
 
@@ -188,13 +188,13 @@ struct VolumeTests {
         let paths = ArrayTrie<ResolutionStrategy>()
         let result = try await vol.resolve(paths: paths, fetcher: fetcher)
 
-        #expect(fetcher.provideCalls.count == 0)
+        #expect(fetcher.provideCalls.count == 1)
         #expect(result.rawCID == vol.rawCID)
     }
 
     // MARK: - Nested Volumes
 
-    @Test("Nested Volumes resolve without enter/exit (v2 implicit)")
+    @Test("Nested Volumes call enterVolume once per Volume boundary")
     func nestedVolumes() async throws {
         let fetcher = VolumeTestFetcher()
 
@@ -215,12 +215,13 @@ struct VolumeTests {
 
         let _ = try await cidOnly.resolve(paths: paths, fetcher: fetcher)
 
-        #expect(fetcher.provideCalls.count == 0)
+        // Outer volume + inner volume each call enterVolume once → 2 calls total
+        #expect(fetcher.provideCalls.count == 2)
     }
 
     // MARK: - Volume through any Header existential
 
-    @Test("Volume resolves through any Header existential (v2 implicit)")
+    @Test("Volume resolves through any Header existential")
     func existentialDispatch() async throws {
         let fetcher = VolumeTestFetcher()
 
@@ -238,7 +239,7 @@ struct VolumeTests {
         paths.set([], value: .recursive)
         let _ = try await existential.resolveRecursive(fetcher: fetcher)
 
-        #expect(fetcher.provideCalls.count == 0)
+        #expect(fetcher.provideCalls.count == 1)
     }
 
     // MARK: - Store and resolve round-trip

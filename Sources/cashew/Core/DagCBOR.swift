@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(CoreFoundation)
+import CoreFoundation
+#endif
 
 public enum DagCBORError: Error {
     case unsupportedType
@@ -191,10 +194,17 @@ public struct DagCBOR {
         case is NSNull:
             output.append(0xf6)
         case let number as NSNumber:
-            // Distinguish Bool from numeric NSNumber using the ObjC type encoding.
-            // Swift Foundation encodes Bool-backed NSNumber as "B" on both Apple
-            // and Linux. CFGetTypeID works too but requires CoreFoundation (Darwin-only).
+            // Distinguish Bool from numeric NSNumber.
+            // On Apple platforms CFGetTypeID reliably identifies kCFBooleanTrue/False
+            // singletons that JSONSerialization creates for JSON true/false.
+            // objCType alone is "c" for both ObjC BOOL and Swift Bool, so it cannot
+            // distinguish them from int8/char on macOS.
+            // On Linux (no CoreFoundation) JSONSerialization encodes booleans as "B".
+            #if canImport(CoreFoundation)
+            let isBool = CFGetTypeID(number) == CFBooleanGetTypeID()
+            #else
             let isBool = String(cString: number.objCType) == "B"
+            #endif
             if isBool {
                 output.append(number.boolValue ? 0xf5 : 0xf4)
             } else if isInteger(number) {

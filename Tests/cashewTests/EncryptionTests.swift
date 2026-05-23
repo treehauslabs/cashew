@@ -1672,3 +1672,52 @@ struct EncryptionScenarioTests {
         }
     }
 }
+
+
+@Test("DEBUG: Trace alice storage")
+func debugAliceStorage() async throws {
+    let key = SymmetricKey(size: .bits256)
+    let fetcher = TestKeyProvidingStoreFetcher()
+    fetcher.registerKey(key)
+    
+    typealias DT = MerkleDictionaryImpl<HeaderImpl<TestScalar>>
+    var dict = DT()
+    dict = try dict.inserting(key: "alice", value: HeaderImpl(node: TestScalar(val: 1)))
+    let header = HeaderImpl(node: dict)
+    
+    var enc = ArrayTrie<EncryptionStrategy>()
+    enc.set([""], value: .targeted(key))
+    let encrypted = try header.encrypt(encryption: enc)
+    
+    // Get alice's header BEFORE store
+    let encNode = encrypted.node!
+    let aliceHeader = try encNode.get(key: "alice")!
+    print("alice rawCID:", aliceHeader.rawCID)
+    print("alice encryptionInfo:", (aliceHeader as? HeaderImpl<TestScalar>)?.encryptionInfo != nil)
+    
+    try encrypted.storeRecursively(storer: fetcher)
+    
+    // Check what's stored at alice's CID
+    let aliceCID = aliceHeader.rawCID
+    if let storedData = try? await fetcher.fetch(rawCid: aliceCID) {
+        print("Stored at alice CID: \(storedData.count) bytes")
+        // Try to decode as plain TestScalar
+        if let plain = TestScalar(data: storedData) {
+            print("Stored as PLAIN (encryption broken!): val=\(plain.val)")
+        } else {
+            print("Stored as encrypted (good — not plain decodable)")
+            // Try to decrypt
+            do {
+                let dec = try EncryptionHelper.decrypt(data: storedData, key: key)
+                print("Decrypted to \(dec.count) bytes")
+                if let ts = TestScalar(data: dec) {
+                    print("Decoded after decrypt: val=\(ts.val)")
+                }
+            } catch {
+                print("Decrypt failed:", error)
+            }
+        }
+    } else {
+        print("alice CID NOT FOUND in storage!")
+    }
+}
