@@ -21,16 +21,7 @@ public extension Header {
             guard let nodeData = node.toData() else { throw DataErrors.serializationFailed }
             dataToStore = nodeData
         }
-        // If this Header is also a Volume and the storer is VolumeAware, use enter/exit
-        // scope management so sub-volumes are stored under their own roots.
-        if self is any Volume, let volumeAware = storer as? VolumeAwareStorer {
-            try volumeAware.enterVolume(rootCID: rawCID)
-            try volumeAware.store(rawCid: rawCID, data: dataToStore)
-            try node.storeRecursively(storer: volumeAware)
-            try volumeAware.exitVolume(rootCID: rawCID)
-        } else {
-            try storer.store(rawCid: rawCID, data: dataToStore)
-            try node.storeRecursively(storer: storer)
-        }
+        try storer.store(rawCid: rawCID, data: dataToStore)
+        try node.storeRecursively(storer: storer)
     }
 }

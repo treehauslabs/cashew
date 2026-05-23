@@ -149,7 +149,7 @@ struct VolumeMerkleDictionaryTests {
         }
     }
 
-    @Test("Resolving the trie fires provide() for the root Volume")
+    @Test("Resolving the trie fires provide() at every trie node — not just the root")
     func provideFiresAtEveryNode() async throws {
         let dict = try Dict()
             .inserting(key: "alice", value: "v1")
@@ -160,17 +160,22 @@ struct VolumeMerkleDictionaryTests {
         let outer = VolumeImpl(node: dict)
         try outer.storeRecursively(storer: fetcher)
 
+        // Collect every CID we put on the wire for later comparison.
+        var expectedCIDs: Set<String> = [outer.rawCID]
+        try Self.visitAllHeaders(in: dict) { header in
+            expectedCIDs.insert(header.rawCID)
+        }
+
         // Strip in-memory nodes so resolve has to fetch.
         let stripped = VolumeImpl<Dict>(rawCID: outer.rawCID, node: nil, encryptionInfo: nil)
         _ = try await stripped.resolveRecursive(fetcher: fetcher)
 
-        // The outer VolumeImpl root must fire provide() so the fetcher can
-        // pre-load entries for the entire volume group into its cache.
+        // Every Volume boundary we walked past must have called provide.
         let provided = Set(fetcher.providedRoots)
-        #expect(provided.contains(outer.rawCID),
-                "expected provide() to fire for outer volume root but fetcher saw: \(fetcher.providedRoots)")
-        // Verify the resolve actually populated data (cache-loading worked)
-        #expect(provided.count >= 1, "at least the root volume must have called provide()")
+        for cid in expectedCIDs {
+            #expect(provided.contains(cid),
+                    "expected provide() to fire for CID \(cid) but fetcher saw roots: \(fetcher.providedRoots)")
+        }
     }
 }
 
