@@ -237,9 +237,12 @@ struct ContentAddressabilityTests {
         @Test("Decoding invalid data throws CashewDecodingError")
         func testDecodingInvalidDataThrowsCashewError() async throws {
             let fetcher = TestStoreFetcher()
-            fetcher.storeRaw(rawCid: "fakeCID", data: Data([0xFF, 0xFE]))
+            let invalidData = Data([0xFF, 0xFE])
+            let multihash = try Multihash(raw: invalidData, hashedWith: .sha2_256)
+            let cid = try CID(version: .v1, codec: .dag_cbor, multihash: multihash)
+            fetcher.storeRaw(rawCid: cid.toBaseEncodedString, data: invalidData)
 
-            let header = HeaderImpl<MerkleDictionaryImpl<String>>(rawCID: "fakeCID")
+            let header = HeaderImpl<MerkleDictionaryImpl<String>>(rawCID: cid.toBaseEncodedString)
             await #expect(throws: CashewDecodingError.self) {
                 _ = try await header.resolve(fetcher: fetcher)
             }
