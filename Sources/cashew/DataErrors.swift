@@ -3,9 +3,9 @@ public enum DataErrors: Error {
     case nodeNotAvailable
     case serializationFailed
     case cidCreationFailed
+    case cidMismatch
     case encryptionFailed
     case decryptionFailed
     case keyNotFound
     case invalidIV
 }
-

@@ -105,10 +105,11 @@ struct BasicResolutionTests {
 
     @Test("Header resolve fetches and reconstructs node from CID")
     func testBasicHeaderResolve() async throws {
-        let cid = "test-cid-123"
+        let storedHeader = HeaderImpl(node: SimpleNode(id: "fetched-node", isLeaf: true))
+        let cid = storedHeader.rawCID
         let header = HeaderImpl<SimpleNode>(rawCID: cid)
 
-        let fetcher = SimpleFetcher(responses: [cid: SimpleNode(id: "fetched-node", isLeaf: true)])
+        let fetcher = SimpleFetcher(responses: [cid: storedHeader.node!])
 
         let resolvedHeader = try await header.resolve(fetcher: fetcher)
 
@@ -118,10 +119,11 @@ struct BasicResolutionTests {
 
     @Test("Header resolveRecursive fetches and processes node")
     func testHeaderResolveRecursive() async throws {
-        let cid = "recursive-cid-456"
+        let storedHeader = HeaderImpl(node: SimpleNode(id: "recursive-node", isLeaf: true))
+        let cid = storedHeader.rawCID
         let header = HeaderImpl<SimpleNode>(rawCID: cid)
 
-        let fetcher = SimpleFetcher(responses: [cid: SimpleNode(id: "recursive-node", isLeaf: true)])
+        let fetcher = SimpleFetcher(responses: [cid: storedHeader.node!])
 
         let resolvedHeader = try await header.resolveRecursive(fetcher: fetcher)
 
@@ -135,10 +137,7 @@ struct BasicResolutionTests {
         let header = HeaderImpl(node: node)
         let fetcher = SimpleFetcher()
 
-        var paths = ArrayTrie<ResolutionStrategy>()
-        paths.set(["child1"], value: .targeted)
-
-        let resolvedHeader = try await header.resolve(paths: paths, fetcher: fetcher)
+        let resolvedHeader = try await header.resolve(fetcher: fetcher)
 
         #expect(resolvedHeader.node?.id == "existing")
     }
@@ -192,10 +191,11 @@ struct BasicResolutionTests {
 
     @Test("Node resolve processing")
     func testNodeResolve() async throws {
-        let node = SimpleNode(id: "node-resolve-test")
-        let fetcher = SimpleFetcher(responses: [
-            "node-resolve-test-child1": SimpleNode(id: "leaf1", isLeaf: true)
-        ])
+        let child = DictionaryNode(id: "leaf1")
+        let childHeader = HeaderImpl(node: child)
+        let node = DictionaryNode(id: "node-resolve-test", entries: ["child1": childHeader.rawCID])
+        let fetcher = TestStoreFetcher()
+        try childHeader.storeRecursively(storer: fetcher)
 
         var paths = ArrayTrie<ResolutionStrategy>()
         paths.set(["child1"], value: .targeted)
@@ -204,16 +204,21 @@ struct BasicResolutionTests {
 
         #expect(resolvedNode.id == "node-resolve-test")
         #expect(resolvedNode.properties().contains("child1"))
-        #expect(resolvedNode.properties().contains("child2"))
     }
 
     @Test("Node resolveRecursive processing")
     func testNodeResolveRecursive() async throws {
-        let node = SimpleNode(id: "recursive-node-test")
-        let fetcher = SimpleFetcher(responses: [
-            "recursive-node-test-child1": SimpleNode(id: "leaf1", isLeaf: true),
-            "recursive-node-test-child2": SimpleNode(id: "leaf2", isLeaf: true)
-        ])
+        let child1 = DictionaryNode(id: "leaf1")
+        let child2 = DictionaryNode(id: "leaf2")
+        let childHeader1 = HeaderImpl(node: child1)
+        let childHeader2 = HeaderImpl(node: child2)
+        let node = DictionaryNode(
+            id: "recursive-node-test",
+            entries: ["child1": childHeader1.rawCID, "child2": childHeader2.rawCID]
+        )
+        let fetcher = TestStoreFetcher()
+        try childHeader1.storeRecursively(storer: fetcher)
+        try childHeader2.storeRecursively(storer: fetcher)
 
         let resolvedNode = try await node.resolveRecursive(fetcher: fetcher)
 
@@ -385,7 +390,7 @@ struct ResolutionStrategiesTests {
         #expect(recreatedCID == originalCID)
     }
 
-    @Test("Resolve verifies data integrity through hash")
+    @Test("Resolve rejects bytes stored under the wrong CID")
     func testResolveDataIntegrityVerification() async throws {
         var originalDict = MerkleDictionaryImpl<String>(children: [:], count: 0)
         originalDict = try originalDict.inserting(key: "hash", value: "verification")
@@ -398,19 +403,21 @@ struct ResolutionStrategiesTests {
         let tamperedCID = tamperedHeader.rawCID
 
         let fetcher = TestStoreFetcher()
-        try tamperedHeader.storeRecursively(storer: fetcher)
+        guard let tamperedData = tamperedDict.toData() else {
+            Issue.record("failed to serialize tampered dictionary")
+            return
+        }
+        fetcher.storeRaw(rawCid: originalCID, data: tamperedData)
 
-        let cidOnlyHeader = HeaderImpl<MerkleDictionaryImpl<String>>(rawCID: tamperedCID)
+        let cidOnlyHeader = HeaderImpl<MerkleDictionaryImpl<String>>(rawCID: originalCID)
 
         var paths = ArrayTrie<ResolutionStrategy>()
         paths.set(["hash"], value: .targeted)
 
-        let resolvedHeader = try await cidOnlyHeader.resolve(paths: paths, fetcher: fetcher)
-
-        #expect(try resolvedHeader.node?.get(key: "hash") == "corrupted")
-
         #expect(tamperedCID != originalCID)
-        #expect(resolvedHeader.rawCID == tamperedCID)
+        await #expect(throws: DataErrors.self) {
+            _ = try await cidOnlyHeader.resolve(paths: paths, fetcher: fetcher)
+        }
     }
 
     @Test("Multiple resolve operations with same CID produce consistent results")
@@ -1948,4 +1955,3 @@ struct ConcurrentResolutionTests {
         }
     }
 }
-
