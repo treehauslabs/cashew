@@ -11,7 +11,7 @@
  * - `.range` behaves like `.list` but only materializes keys in the given
  *   cursor window, skipping children whose leading character precedes `after`.
  */
-public enum ResolutionStrategy: Equatable, Sendable {
+public enum ResolutionStrategy: Codable, Equatable, Hashable, Sendable {
     /// Fetches the Header at this path (CID → node) without descending further.
     case targeted
 
