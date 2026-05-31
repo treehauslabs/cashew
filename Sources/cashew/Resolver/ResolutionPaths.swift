@@ -21,7 +21,7 @@ public struct ResolutionPaths: Codable, Equatable, Hashable, Sendable {
     public let entries: [ResolutionPath]
 
     public init(_ entries: [ResolutionPath] = []) {
-        self.entries = entries.sorted()
+        self.entries = Self.canonicalize(entries)
     }
 
     public init(_ paths: [[String]: ResolutionStrategy]) {
@@ -47,6 +47,18 @@ public struct ResolutionPaths: Codable, Equatable, Hashable, Sendable {
         }
         return trie
     }
+
+    private static func canonicalize(_ entries: [ResolutionPath]) -> [ResolutionPath] {
+        var byPath: [[String]: ResolutionStrategy] = [:]
+        for entry in entries {
+            if let existing = byPath[entry.components] {
+                byPath[entry.components] = ResolutionStrategy.merge(existing, entry.strategy)
+            } else {
+                byPath[entry.components] = entry.strategy
+            }
+        }
+        return byPath.map { ResolutionPath($0.key, strategy: $0.value) }.sorted()
+    }
 }
 
 extension ResolutionPath: Comparable {
@@ -68,7 +80,10 @@ private extension ResolutionStrategy {
         case .list:
             return "2"
         case .range(let after, let limit):
-            return "3:\(after ?? ""):\(limit)"
+            if let after {
+                return "3:1:\(after):\(limit)"
+            }
+            return "3:0:\(limit)"
         }
     }
 }

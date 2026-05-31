@@ -28,3 +28,19 @@ public enum ResolutionStrategy: Codable, Equatable, Hashable, Sendable {
     /// for up to `limit` keys after the cursor without resolving nested addresses.
     case range(after: String?, limit: Int)
 }
+
+public extension ResolutionStrategy {
+    /// Merge two strategies for the same exact resolution path.
+    ///
+    /// Broader strategies subsume narrower ones: recursive resolves everything,
+    /// list resolves enumerable structure, range resolves a list window, and
+    /// targeted resolves one header/value.
+    static func merge(_ lhs: Self, _ rhs: Self) -> Self {
+        if lhs == rhs { return lhs }
+        if lhs == .recursive || rhs == .recursive { return .recursive }
+        if lhs == .list || rhs == .list { return .list }
+        if case .range = lhs { return lhs }
+        if case .range = rhs { return rhs }
+        return .targeted
+    }
+}
